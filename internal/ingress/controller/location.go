@@ -71,7 +71,7 @@ func updateServerLocations(locations []*ingress.Location) []*ingress.Location {
 			continue
 		}
 
-		el := *location
+		var el ingress.Location = *location
 
 		// normalize path. Must end in /
 		location.Path = normalizePrefixPath(location.Path)
