@@ -25,7 +25,7 @@ import (
 
 	"github.com/mitchellh/hashstructure"
 	apiv1 "k8s.io/api/core/v1"
-	networking "k8s.io/api/networking/v1beta1"
+	networking "k8s.io/api/networking/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -33,11 +33,12 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/ingress-nginx/internal/ingress"
 	"k8s.io/ingress-nginx/internal/ingress/annotations"
-	"k8s.io/ingress-nginx/internal/ingress/annotations/class"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/log"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/parser"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/proxy"
 	ngx_config "k8s.io/ingress-nginx/internal/ingress/controller/config"
+	"k8s.io/ingress-nginx/internal/ingress/controller/ingressclass"
+	"k8s.io/ingress-nginx/internal/ingress/controller/store"
 	"k8s.io/ingress-nginx/internal/ingress/errors"
 	"k8s.io/ingress-nginx/internal/k8s"
 	"k8s.io/ingress-nginx/internal/nginx"
@@ -99,6 +100,8 @@ type Configuration struct {
 
 	DisableCatchAll bool
 
+	IngressClassConfiguration *ingressclass.IngressClassConfiguration
+
 	ValidationWebhook         string
 	ValidationWebhookCertPath string
 	ValidationWebhookKeyPath  string
@@ -132,27 +135,27 @@ func (n *NGINXController) syncIngress(interface{}) error {
 	}
 
 	ings := n.store.ListIngresses()
-	hosts, servers, newCfg := n.getConfiguration(ings)
+	hosts, servers, pcfg := n.getConfiguration(ings)
 
 	n.metricCollector.SetSSLExpireTime(servers)
 
-	if n.runningConfig.Equal(newCfg) {
+	if n.runningConfig.Equal(pcfg) {
 		klog.V(3).Infof("No configuration change detected, skipping backend reload")
 		return nil
 	}
 
 	n.metricCollector.SetHosts(hosts)
 
-	if !n.IsDynamicConfigurationEnough(newCfg) {
+	if !n.IsDynamicConfigurationEnough(pcfg) {
 		klog.InfoS("Configuration changes detected, backend reload required")
 
-		hash, _ := hashstructure.Hash(newCfg, &hashstructure.HashOptions{
+		hash, _ := hashstructure.Hash(pcfg, &hashstructure.HashOptions{
 			TagName: "json",
 		})
 
-		newCfg.ConfigurationChecksum = fmt.Sprintf("%v", hash)
+		pcfg.ConfigurationChecksum = fmt.Sprintf("%v", hash)
 
-		err := n.OnUpdate(*newCfg)
+		err := n.OnUpdate(*pcfg)
 		if err != nil {
 			n.metricCollector.IncReloadErrorCount()
 			n.metricCollector.ConfigSuccess(hash, false)
@@ -184,7 +187,7 @@ func (n *NGINXController) syncIngress(interface{}) error {
 	}
 
 	err := wait.ExponentialBackoff(retry, func() (bool, error) {
-		err := n.configureDynamically(newCfg)
+		err := n.configureDynamically(pcfg)
 		if err == nil {
 			klog.V(2).Infof("Dynamic reconfiguration succeeded.")
 			return true, nil
@@ -198,11 +201,11 @@ func (n *NGINXController) syncIngress(interface{}) error {
 		return err
 	}
 
-	ri := getRemovedIngresses(n.runningConfig, newCfg)
-	re := getRemovedHosts(n.runningConfig, newCfg)
+	ri := getRemovedIngresses(n.runningConfig, pcfg)
+	re := getRemovedHosts(n.runningConfig, pcfg)
 	n.metricCollector.RemoveMetrics(ri, re)
 
-	n.runningConfig = newCfg
+	n.runningConfig = pcfg
 
 	return nil
 }
@@ -220,17 +223,12 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 		return nil
 	}
 
-	if !class.IsValid(ing) {
-		klog.Warningf("ignoring ingress %v in %v based on annotation %v", ing.Name, ing.ObjectMeta.Namespace, class.IngressKey)
-		return nil
-	}
-
 	if n.cfg.Namespace != "" && ing.ObjectMeta.Namespace != n.cfg.Namespace {
 		klog.Warningf("ignoring ingress %v in namespace %v different from the namespace watched %s", ing.Name, ing.ObjectMeta.Namespace, n.cfg.Namespace)
 		return nil
 	}
 
-	if n.cfg.DisableCatchAll && ing.Spec.Backend != nil {
+	if n.cfg.DisableCatchAll && ing.Spec.DefaultBackend != nil {
 		return fmt.Errorf("This deployment is trying to create a catch-all ingress while DisableCatchAll flag is set to true. Remove '.spec.backend' or set DisableCatchAll flag to false.")
 	}
 
@@ -254,6 +252,40 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 			}
 		}
 	}
+
+	allIngresses := n.store.ListIngresses()
+
+	filter := func(toCheck *ingress.Ingress) bool {
+		return toCheck.ObjectMeta.Namespace == ing.ObjectMeta.Namespace &&
+			toCheck.ObjectMeta.Name == ing.ObjectMeta.Name
+	}
+	ings := store.FilterIngresses(allIngresses, filter)
+	ings = append(ings, &ingress.Ingress{
+		Ingress:           *ing,
+		ParsedAnnotations: annotations.NewAnnotationExtractor(n.store).Extract(ing),
+	})
+
+	_, servers, pcfg := n.getConfiguration(ings)
+
+	err := checkOverlap(ing, allIngresses, servers)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
+	}
+
+	content, err := n.generateTemplate(cfg, *pcfg)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
+	}
+
+	err = n.testTemplate(content)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
+	}
+
+	n.metricCollector.IncCheckCount(ing.ObjectMeta.Namespace, ing.Name)
 
 	klog.Info("starting validation of ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
 	return n.admissionBatcher.ValidateIngress(ing)
@@ -552,7 +584,13 @@ func (n *NGINXController) getBackendServers(ingresses []*ingress.Ingress) ([]*in
 			}
 
 			for _, path := range rule.HTTP.Paths {
-				upsName := upstreamName(ing.Namespace, path.Backend.ServiceName, path.Backend.ServicePort)
+				if path.Backend.Service == nil {
+					// skip non-service backends
+					klog.V(3).Infof("Ingress %q and path %q does not contain a service backend, using default backend", ingKey, path.Path)
+					continue
+				}
+
+				upsName := upstreamName(ing.Namespace, path.Backend.Service)
 
 				ups := upstreams[upsName]
 
@@ -762,16 +800,17 @@ func (n *NGINXController) getBackendServers(ingresses []*ingress.Ingress) ([]*in
 
 // createUpstreams creates the NGINX upstreams (Endpoints) for each Service
 // referenced in Ingress rules.
-func (n *NGINXController) createUpstreams(ingresses []*ingress.Ingress, du *ingress.Backend) map[string]*ingress.Backend {
+func (n *NGINXController) createUpstreams(data []*ingress.Ingress, du *ingress.Backend) map[string]*ingress.Backend {
 	upstreams := make(map[string]*ingress.Backend)
 	upstreams[defUpstreamName] = du
 
-	for _, ing := range ingresses {
+	for _, ing := range data {
+		ingKey := k8s.MetaNamespaceKey(ing)
 		anns := ing.ParsedAnnotations
 
 		var defBackend string
-		if ing.Spec.Backend != nil {
-			defBackend = upstreamName(ing.Namespace, ing.Spec.Backend.ServiceName, ing.Spec.Backend.ServicePort)
+		if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
+			defBackend = upstreamName(ing.Namespace, ing.Spec.DefaultBackend.Service)
 
 			klog.V(3).Infof("Creating upstream %q", defBackend)
 			upstreams[defBackend] = newUpstream(defBackend)
@@ -785,11 +824,11 @@ func (n *NGINXController) createUpstreams(ingresses []*ingress.Ingress, du *ingr
 				upstreams[defBackend].LoadBalancing = n.store.GetBackendConfiguration().LoadBalancing
 			}
 
-			svcKey := fmt.Sprintf("%v/%v", ing.Namespace, ing.Spec.Backend.ServiceName)
+			svcKey := fmt.Sprintf("%v/%v", ing.Namespace, ing.Spec.DefaultBackend.Service.Name)
 
 			// add the service ClusterIP as a single Endpoint instead of individual Endpoints
 			if anns.ServiceUpstream {
-				endpoint, err := n.getServiceClusterEndpoint(svcKey, ing.Spec.Backend)
+				endpoint, err := n.getServiceClusterEndpoint(svcKey, ing.Spec.DefaultBackend)
 				if err != nil {
 					klog.Errorf("Failed to determine a suitable ClusterIP Endpoint for Service %q: %v", svcKey, err)
 				} else {
@@ -810,7 +849,8 @@ func (n *NGINXController) createUpstreams(ingresses []*ingress.Ingress, du *ingr
 			}
 
 			if len(upstreams[defBackend].Endpoints) == 0 {
-				endps, err := n.serviceEndpoints(svcKey, ing.Spec.Backend.ServicePort.String())
+				_, port := upstreamServiceNameAndPort(ing.Spec.DefaultBackend.Service)
+				endps, err := n.serviceEndpoints(svcKey, port.String())
 				upstreams[defBackend].Endpoints = append(upstreams[defBackend].Endpoints, endps...)
 				if err != nil {
 					klog.Warningf("Error creating upstream %q: %v", defBackend, err)
@@ -830,15 +870,21 @@ func (n *NGINXController) createUpstreams(ingresses []*ingress.Ingress, du *ingr
 			}
 
 			for _, path := range rule.HTTP.Paths {
-				name := upstreamName(ing.Namespace, path.Backend.ServiceName, path.Backend.ServicePort)
+				if path.Backend.Service == nil {
+					// skip non-service backends
+					klog.V(3).Infof("Ingress %q and path %q does not contain a service backend, using default backend", ingKey, path.Path)
+					continue
+				}
 
+				name := upstreamName(ing.Namespace, path.Backend.Service)
+				svcName, svcPort := upstreamServiceNameAndPort(path.Backend.Service)
 				if _, ok := upstreams[name]; ok {
 					continue
 				}
 
 				klog.V(3).Infof("Creating upstream %q", name)
 				upstreams[name] = newUpstream(name)
-				upstreams[name].Port = path.Backend.ServicePort
+				upstreams[name].Port = svcPort
 
 				upstreams[name].UpstreamHashBy.UpstreamHashBy = anns.UpstreamHashBy.UpstreamHashBy
 				upstreams[name].UpstreamHashBy.UpstreamHashBySubset = anns.UpstreamHashBy.UpstreamHashBySubset
@@ -849,7 +895,7 @@ func (n *NGINXController) createUpstreams(ingresses []*ingress.Ingress, du *ingr
 					upstreams[name].LoadBalancing = n.store.GetBackendConfiguration().LoadBalancing
 				}
 
-				svcKey := fmt.Sprintf("%v/%v", ing.Namespace, path.Backend.ServiceName)
+				svcKey := fmt.Sprintf("%v/%v", ing.Namespace, svcName)
 
 				// add the service ClusterIP as a single Endpoint instead of individual Endpoints
 				if anns.ServiceUpstream {
@@ -874,7 +920,8 @@ func (n *NGINXController) createUpstreams(ingresses []*ingress.Ingress, du *ingr
 				}
 
 				if len(upstreams[name].Endpoints) == 0 {
-					endp, err := n.serviceEndpoints(svcKey, path.Backend.ServicePort.String())
+					_, port := upstreamServiceNameAndPort(path.Backend.Service)
+					endp, err := n.serviceEndpoints(svcKey, port.String())
 					if err != nil {
 						klog.Warningf("Error obtaining Endpoints for Service %q: %v", svcKey, err)
 						continue
@@ -912,20 +959,23 @@ func (n *NGINXController) getServiceClusterEndpoint(svcKey string, backend *netw
 
 	// if the Service port is referenced by name in the Ingress, lookup the
 	// actual port in the service spec
-	if backend.ServicePort.Type == intstr.String {
-		var port int32 = -1
-		for _, svcPort := range svc.Spec.Ports {
-			if svcPort.Name == backend.ServicePort.String() {
-				port = svcPort.Port
-				break
+	if backend.Service != nil {
+		_, svcportintorstr := upstreamServiceNameAndPort(backend.Service)
+		if svcportintorstr.Type == intstr.String {
+			var port int32 = -1
+			for _, svcPort := range svc.Spec.Ports {
+				if svcPort.Name == svcportintorstr.String() {
+					port = svcPort.Port
+					break
+				}
 			}
+			if port == -1 {
+				return endpoint, fmt.Errorf("service %q does not have a port named %q", svc.Name, svcportintorstr.String())
+			}
+			endpoint.Port = fmt.Sprintf("%d", port)
+		} else {
+			endpoint.Port = svcportintorstr.String()
 		}
-		if port == -1 {
-			return endpoint, fmt.Errorf("service %q does not have a port named %q", svc.Name, backend.ServicePort)
-		}
-		endpoint.Port = fmt.Sprintf("%d", port)
-	} else {
-		endpoint.Port = backend.ServicePort.String()
 	}
 
 	return endpoint, err
@@ -1056,8 +1106,8 @@ func (n *NGINXController) createServers(data []*ingress.Ingress,
 			continue
 		}
 
-		if ing.Spec.Backend != nil {
-			defUpstream := upstreamName(ing.Namespace, ing.Spec.Backend.ServiceName, ing.Spec.Backend.ServicePort)
+		if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
+			defUpstream := upstreamName(ing.Namespace, ing.Spec.DefaultBackend.Service)
 
 			if backendUpstream, ok := upstreams[defUpstream]; ok {
 				// use backend specified in Ingress as the default backend for all its rules
@@ -1326,8 +1376,8 @@ func mergeAlternativeBackends(ing *ingress.Ingress, upstreams map[string]*ingres
 	servers map[string]*ingress.Server) {
 
 	// merge catch-all alternative backends
-	if ing.Spec.Backend != nil {
-		upsName := upstreamName(ing.Namespace, ing.Spec.Backend.ServiceName, ing.Spec.Backend.ServicePort)
+	if ing.Spec.DefaultBackend != nil {
+		upsName := upstreamName(ing.Namespace, ing.Spec.DefaultBackend.Service)
 
 		altUps := upstreams[upsName]
 
@@ -1369,7 +1419,13 @@ func mergeAlternativeBackends(ing *ingress.Ingress, upstreams map[string]*ingres
 		}
 
 		for _, path := range rule.HTTP.Paths {
-			upsName := upstreamName(ing.Namespace, path.Backend.ServiceName, path.Backend.ServicePort)
+			if path.Backend.Service == nil {
+				// skip non-service backends
+				klog.V(3).Infof("Ingress %q and path %q does not contain a service backend, using default backend", k8s.MetaNamespaceKey(ing), path.Path)
+				continue
+			}
+
+			upsName := upstreamName(ing.Namespace, path.Backend.Service)
 
 			altUps := upstreams[upsName]
 
@@ -1574,7 +1630,7 @@ func externalNamePorts(name string, svc *apiv1.Service) *apiv1.ServicePort {
 	}
 }
 
-func checkOverlap(ing *networking.Ingress, servers []*ingress.Server) error {
+func checkOverlap(ing *networking.Ingress, ingresses []*ingress.Ingress, servers []*ingress.Server) error {
 	for _, rule := range ing.Spec.Rules {
 		if rule.HTTP == nil {
 			continue
@@ -1585,6 +1641,12 @@ func checkOverlap(ing *networking.Ingress, servers []*ingress.Server) error {
 		}
 
 		for _, path := range rule.HTTP.Paths {
+			if path.Backend.Service == nil {
+				// skip non-service backends
+				klog.V(3).Infof("Ingress %q and path %q does not contain a service backend, using default backend", k8s.MetaNamespaceKey(ing), path.Path)
+				continue
+			}
+
 			if path.Path == "" {
 				path.Path = rootLocation
 			}
@@ -1597,10 +1659,15 @@ func checkOverlap(ing *networking.Ingress, servers []*ingress.Server) error {
 			}
 
 			// same ingress
+			skipValidation := false
 			for _, existing := range existingIngresses {
 				if existing.ObjectMeta.Namespace == ing.ObjectMeta.Namespace && existing.ObjectMeta.Name == ing.ObjectMeta.Name {
 					return nil
 				}
+			}
+
+			if skipValidation {
+				continue
 			}
 
 			// path overlap. Check if one of the ingresses has a canary annotation
