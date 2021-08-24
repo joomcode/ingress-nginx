@@ -1507,7 +1507,7 @@ func extractTLSSecretName(host string, ing *ingress.Ingress,
 			continue
 		}
 
-		if cert == nil { // for tests
+		if cert == nil || cert.Certificate == nil {
 			continue
 		}
 
