@@ -607,6 +607,7 @@ func (n *NGINXController) generateTemplate(cfg ngx_config.Configuration, ingress
 		StatusPath:               nginx.StatusPath,
 		StatusPort:               nginx.StatusPort,
 		StreamPort:               nginx.StreamPort,
+		StreamSnippets:           append(ingressCfg.StreamSnippets, cfg.StreamSnippet),
 	}
 
 	tc.Cfg.Checksum = ingressCfg.ConfigurationChecksum
