@@ -108,6 +108,8 @@ func NewNGINXController(config *Configuration, mc metric.Collector) *NGINXContro
 		metricCollector: mc,
 
 		command: NewNginxCommand(),
+
+		admissionBatcher: NewAdmissionBatcher(),
 	}
 
 	if n.cfg.ValidationWebhook != "" {
@@ -247,6 +249,8 @@ type NGINXController struct {
 	validationWebhookServer *http.Server
 
 	command NginxExecTester
+
+	admissionBatcher AdmissionBatcher
 }
 
 // Start starts a new NGINX master process running in the foreground.
@@ -320,6 +324,8 @@ func (n *NGINXController) Start() {
 		}()
 	}
 
+	go n.AdmissionBatcherConsumerRoutine()
+
 	for {
 		select {
 		case err := <-n.ngxErrCh:
@@ -366,6 +372,8 @@ func (n *NGINXController) Stop() error {
 	if n.syncQueue.IsShuttingDown() {
 		return fmt.Errorf("shutdown already in progress")
 	}
+
+	n.admissionBatcher.Shutdown()
 
 	time.Sleep(time.Duration(n.cfg.ShutdownGracePeriod) * time.Second)
 
@@ -422,7 +430,7 @@ func (n *NGINXController) start(cmd *exec.Cmd) {
 }
 
 // DefaultEndpoint returns the default endpoint to be use as default server that returns 404.
-func (n NGINXController) DefaultEndpoint() ingress.Endpoint {
+func (n *NGINXController) DefaultEndpoint() ingress.Endpoint {
 	return ingress.Endpoint{
 		Address: "127.0.0.1",
 		Port:    fmt.Sprintf("%v", n.cfg.ListenPorts.Default),
@@ -431,7 +439,7 @@ func (n NGINXController) DefaultEndpoint() ingress.Endpoint {
 }
 
 // generateTemplate returns the nginx configuration file content
-func (n NGINXController) generateTemplate(cfg ngx_config.Configuration, ingressCfg ingress.Configuration) ([]byte, error) {
+func (n *NGINXController) generateTemplate(cfg ngx_config.Configuration, ingressCfg ingress.Configuration) ([]byte, error) {
 
 	if n.cfg.EnableSSLPassthrough {
 		servers := []*TCPServer{}
@@ -612,7 +620,7 @@ func (n NGINXController) generateTemplate(cfg ngx_config.Configuration, ingressC
 
 // testTemplate checks if the NGINX configuration inside the byte array is valid
 // running the command "nginx -t" using a temporal file.
-func (n NGINXController) testTemplate(cfg []byte) error {
+func (n *NGINXController) testTemplate(cfg []byte) error {
 	if len(cfg) == 0 {
 		return fmt.Errorf("invalid NGINX configuration (empty)")
 	}

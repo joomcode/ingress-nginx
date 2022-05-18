@@ -38,7 +38,6 @@ import (
 	"k8s.io/ingress-nginx/internal/ingress/annotations/parser"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/proxy"
 	ngx_config "k8s.io/ingress-nginx/internal/ingress/controller/config"
-	"k8s.io/ingress-nginx/internal/ingress/controller/store"
 	"k8s.io/ingress-nginx/internal/ingress/errors"
 	"k8s.io/ingress-nginx/internal/k8s"
 	"k8s.io/ingress-nginx/internal/nginx"
@@ -113,7 +112,7 @@ type Configuration struct {
 }
 
 // GetPublishService returns the Service used to set the load-balancer status of Ingresses.
-func (n NGINXController) GetPublishService() *apiv1.Service {
+func (n *NGINXController) GetPublishService() *apiv1.Service {
 	s, err := n.store.GetService(n.cfg.PublishService)
 	if err != nil {
 		return nil
@@ -133,27 +132,27 @@ func (n *NGINXController) syncIngress(interface{}) error {
 	}
 
 	ings := n.store.ListIngresses()
-	hosts, servers, pcfg := n.getConfiguration(ings)
+	hosts, servers, newCfg := n.getConfiguration(ings)
 
 	n.metricCollector.SetSSLExpireTime(servers)
 
-	if n.runningConfig.Equal(pcfg) {
+	if n.runningConfig.Equal(newCfg) {
 		klog.V(3).Infof("No configuration change detected, skipping backend reload")
 		return nil
 	}
 
 	n.metricCollector.SetHosts(hosts)
 
-	if !n.IsDynamicConfigurationEnough(pcfg) {
+	if !n.IsDynamicConfigurationEnough(newCfg) {
 		klog.InfoS("Configuration changes detected, backend reload required")
 
-		hash, _ := hashstructure.Hash(pcfg, &hashstructure.HashOptions{
+		hash, _ := hashstructure.Hash(newCfg, &hashstructure.HashOptions{
 			TagName: "json",
 		})
 
-		pcfg.ConfigurationChecksum = fmt.Sprintf("%v", hash)
+		newCfg.ConfigurationChecksum = fmt.Sprintf("%v", hash)
 
-		err := n.OnUpdate(*pcfg)
+		err := n.OnUpdate(*newCfg)
 		if err != nil {
 			n.metricCollector.IncReloadErrorCount()
 			n.metricCollector.ConfigSuccess(hash, false)
@@ -185,7 +184,7 @@ func (n *NGINXController) syncIngress(interface{}) error {
 	}
 
 	err := wait.ExponentialBackoff(retry, func() (bool, error) {
-		err := n.configureDynamically(pcfg)
+		err := n.configureDynamically(newCfg)
 		if err == nil {
 			klog.V(2).Infof("Dynamic reconfiguration succeeded.")
 			return true, nil
@@ -199,11 +198,11 @@ func (n *NGINXController) syncIngress(interface{}) error {
 		return err
 	}
 
-	ri := getRemovedIngresses(n.runningConfig, pcfg)
-	re := getRemovedHosts(n.runningConfig, pcfg)
+	ri := getRemovedIngresses(n.runningConfig, newCfg)
+	re := getRemovedHosts(n.runningConfig, newCfg)
 	n.metricCollector.RemoveMetrics(ri, re)
 
-	n.runningConfig = pcfg
+	n.runningConfig = newCfg
 
 	return nil
 }
@@ -256,40 +255,7 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 		}
 	}
 
-	allIngresses := n.store.ListIngresses()
-
-	filter := func(toCheck *ingress.Ingress) bool {
-		return toCheck.ObjectMeta.Namespace == ing.ObjectMeta.Namespace &&
-			toCheck.ObjectMeta.Name == ing.ObjectMeta.Name
-	}
-	ings := store.FilterIngresses(allIngresses, filter)
-	ings = append(ings, &ingress.Ingress{
-		Ingress:           *ing,
-		ParsedAnnotations: annotations.NewAnnotationExtractor(n.store).Extract(ing),
-	})
-
-	_, servers, pcfg := n.getConfiguration(ings)
-
-	err := checkOverlap(ing, allIngresses, servers)
-	if err != nil {
-		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		return err
-	}
-
-	content, err := n.generateTemplate(cfg, *pcfg)
-	if err != nil {
-		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		return err
-	}
-
-	err = n.testTemplate(content)
-	if err != nil {
-		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		return err
-	}
-
-	n.metricCollector.IncCheckCount(ing.ObjectMeta.Namespace, ing.Name)
-	return nil
+	return n.admissionBatcher.ValidateIngress(ing)
 }
 
 func (n *NGINXController) getStreamServices(configmapName string, proto apiv1.Protocol) []ingress.L4Service {
@@ -1591,7 +1557,7 @@ func externalNamePorts(name string, svc *apiv1.Service) *apiv1.ServicePort {
 	}
 }
 
-func checkOverlap(ing *networking.Ingress, ingresses []*ingress.Ingress, servers []*ingress.Server) error {
+func checkOverlap(ing *networking.Ingress, servers []*ingress.Server) error {
 	for _, rule := range ing.Spec.Rules {
 		if rule.HTTP == nil {
 			continue
@@ -1614,15 +1580,10 @@ func checkOverlap(ing *networking.Ingress, ingresses []*ingress.Ingress, servers
 			}
 
 			// same ingress
-			skipValidation := false
 			for _, existing := range existingIngresses {
 				if existing.ObjectMeta.Namespace == ing.ObjectMeta.Namespace && existing.ObjectMeta.Name == ing.ObjectMeta.Name {
 					return nil
 				}
-			}
-
-			if skipValidation {
-				continue
 			}
 
 			// path overlap. Check if one of the ingresses has a canary annotation
