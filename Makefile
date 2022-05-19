@@ -44,7 +44,7 @@ BUILD_ID ?= "UNSET"
 PKG = k8s.io/ingress-nginx
 
 HOST_ARCH = $(shell which go >/dev/null 2>&1 && go env GOARCH)
-ARCH ?= $(HOST_ARCH)
+ARCH ?= amd64
 ifeq ($(ARCH),)
     $(error mandatory variable ARCH is empty, either set it when calling the command or make sure 'go env GOARCH' works)
 endif

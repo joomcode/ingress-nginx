@@ -60,6 +60,8 @@ RUN bash -xeu -c ' \
     chown -R www-data.www-data ${dir}; \
   done'
 
+RUN chmod +x /nginx-ingress-controller
+
 RUN apk add --no-cache libcap \
   && setcap    cap_net_bind_service=+ep /nginx-ingress-controller \
   && setcap -v cap_net_bind_service=+ep /nginx-ingress-controller \
@@ -67,11 +69,11 @@ RUN apk add --no-cache libcap \
   && setcap -v cap_net_bind_service=+ep /usr/local/nginx/sbin/nginx \
   && apk del libcap
 
-USER www-data
-
 # Create symlinks to redirect nginx logs to stdout and stderr docker log collector
 RUN  ln -sf /dev/stdout /var/log/nginx/access.log \
   && ln -sf /dev/stderr /var/log/nginx/error.log
+
+USER www-data
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 
