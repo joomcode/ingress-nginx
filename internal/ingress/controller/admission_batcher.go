@@ -85,6 +85,8 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 	n.admissionBatcher.consumerWG.Add(1)
 	defer n.admissionBatcher.consumerWG.Done()
 
+	klog.Info("Admission batcher routine started")
+
 	// prevent races on isWorking field
 	n.admissionBatcher.mu.Lock()
 	for n.admissionBatcher.isWorking {
