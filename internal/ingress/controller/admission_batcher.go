@@ -40,11 +40,11 @@ type AdmissionBatcher struct {
 	// index of queue that is not being processed right now
 	freeQueueIdx atomic.Int32
 
-	// mutex protecting queues access
-	mu *sync.Mutex
-
 	// flag for consumer goroutine indicating whether it should keep processing or not
 	isWorking bool
+
+	// mutex protecting queues access
+	mu *sync.Mutex
 
 	// wait group to monitor consumer goroutine lifetime
 	consumerWG sync.WaitGroup
@@ -55,6 +55,8 @@ func NewAdmissionBatcher() AdmissionBatcher {
 		queues:       [2]AdmissionQueue{NewAdmissionQueue(), NewAdmissionQueue()},
 		freeQueueIdx: atomic.Int32{},
 		isWorking:    true,
+		mu:           &sync.Mutex{},
+		consumerWG:   sync.WaitGroup{},
 	}
 }
 
