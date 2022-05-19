@@ -92,15 +92,17 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 
 		time.Sleep(admissionDelay)
 		newIngresses, errorChannels := n.admissionBatcher.fetchNewBatch()
-		klog.Info("Received new batch of ingresses for validation:")
-		for _, ing := range newIngresses {
-			klog.InfoS("Ingress for validation", "namespace", ing.ObjectMeta.Namespace, "name", ing.ObjectMeta.Name)
-		}
+		if len(newIngresses) != 0 {
+			klog.Info("Received new batch of ingresses for validation:")
+			for _, ing := range newIngresses {
+				klog.InfoS("Ingress for validation", "namespace", ing.ObjectMeta.Namespace, "name", ing.ObjectMeta.Name)
+			}
 
-		err := n.validateNewIngresses(newIngresses)
-		if err != nil {
-			for _, erCh := range errorChannels {
-				erCh <- err
+			err := n.validateNewIngresses(newIngresses)
+			if err != nil {
+				for _, erCh := range errorChannels {
+					erCh <- err
+				}
 			}
 		}
 
