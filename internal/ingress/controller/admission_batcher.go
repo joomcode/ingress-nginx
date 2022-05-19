@@ -103,6 +103,8 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 				erCh <- err
 			}
 		}
+
+		n.admissionBatcher.mu.Lock()
 	}
 }
 
