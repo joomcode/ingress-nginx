@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,10 +97,12 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 		time.Sleep(admissionDelay)
 		newIngresses, errorChannels := n.admissionBatcher.fetchNewBatch()
 		if len(newIngresses) != 0 {
-			klog.Info("Received new batch of ingresses for validation:")
+			var logmsg strings.Builder
+			logmsg.WriteString("Received new batch of ingresses for validation: ")
 			for _, ing := range newIngresses {
-				klog.InfoS("Ingress for validation", "namespace", ing.ObjectMeta.Namespace, "name", ing.ObjectMeta.Name)
+				logmsg.WriteString(fmt.Sprintf("%s/%s ", ing.ObjectMeta.Namespace, ing.ObjectMeta.Name))
 			}
+			klog.Info(logmsg.String())
 
 			err := n.validateNewIngresses(newIngresses)
 			if err != nil {
