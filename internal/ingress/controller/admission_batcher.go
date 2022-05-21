@@ -213,11 +213,14 @@ func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorCh
 
 func (ab *AdmissionBatcher) ValidateIngress(ing *networking.Ingress) error {
 	ab.mu.Lock()
+
 	freeQueue := ab.freeQueue()
 	freeQueue.ingresses = append(freeQueue.ingresses, ing)
 
 	errCh := make(chan error)
 	freeQueue.errorChannels = append(freeQueue.errorChannels, errCh)
+
+	ab.mu.Unlock()
 
 	return <-errCh
 }
