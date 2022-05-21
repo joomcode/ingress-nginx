@@ -255,6 +255,7 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 		}
 	}
 
+	klog.Info("starting validation of ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
 	return n.admissionBatcher.ValidateIngress(ing)
 }
 
