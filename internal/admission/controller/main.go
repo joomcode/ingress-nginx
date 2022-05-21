@@ -97,8 +97,9 @@ func (ia *IngressAdmission) HandleAdmission(obj runtime.Object) (runtime.Object,
 		return convertResponse(review, outputVersion), nil
 	}
 
+	klog.InfoS("starting validation of ingress", "ingress", fmt.Sprintf("%v/%v", review.Request.Namespace, review.Request.Name))
 	if err := ia.Checker.CheckIngress(&ingress); err != nil {
-		klog.ErrorS(err, "invalid ingress configuration", "ingress", fmt.Sprintf("%v/%v", review.Request.Name, review.Request.Namespace))
+		klog.ErrorS(err, "invalid ingress configuration", "ingress", fmt.Sprintf("%v/%v", review.Request.Namespace, review.Request.Name))
 		status.Allowed = false
 		status.Result = &metav1.Status{
 			Status: metav1.StatusFailure, Code: http.StatusBadRequest, Reason: metav1.StatusReasonBadRequest,

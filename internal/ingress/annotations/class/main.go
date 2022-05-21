@@ -47,7 +47,6 @@ func IsValid(ing *networking.Ingress) bool {
 		ingress = *ing.Spec.IngressClassName
 	}
 
-	// empty ingress and IngressClass equal default
 	if len(ingress) == 0 && IngressClass == DefaultClass {
 		return true
 	}
