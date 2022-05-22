@@ -29,15 +29,15 @@ type AdmissionQueue struct {
 	errorChannels []chan error
 }
 
-func NewAdmissionQueue() AdmissionQueue {
-	return AdmissionQueue{
+func NewAdmissionQueue() *AdmissionQueue {
+	return &AdmissionQueue{
 		ingresses:     nil,
 		errorChannels: nil,
 	}
 }
 
 type AdmissionBatcher struct {
-	queues [2]AdmissionQueue
+	queues [2]*AdmissionQueue
 
 	// index of queue that is not being processed right now
 	freeQueueIdx atomic.Int32
@@ -54,7 +54,7 @@ type AdmissionBatcher struct {
 
 func NewAdmissionBatcher() AdmissionBatcher {
 	return AdmissionBatcher{
-		queues:       [2]AdmissionQueue{NewAdmissionQueue(), NewAdmissionQueue()},
+		queues:       [2]*AdmissionQueue{NewAdmissionQueue(), NewAdmissionQueue()},
 		freeQueueIdx: atomic.Int32{},
 		isWorking:    true,
 		mu:           &sync.Mutex{},
@@ -69,11 +69,11 @@ func (ab *AdmissionBatcher) Shutdown() {
 	ab.isWorking = false
 }
 
-func (ab *AdmissionBatcher) freeQueue() AdmissionQueue {
+func (ab *AdmissionBatcher) freeQueue() *AdmissionQueue {
 	return ab.queues[ab.freeQueueIdx.Load()]
 }
 
-func (ab *AdmissionBatcher) nextFreeQueue() AdmissionQueue {
+func (ab *AdmissionBatcher) nextFreeQueue() *AdmissionQueue {
 	return ab.queues[1-ab.freeQueueIdx.Load()]
 }
 
