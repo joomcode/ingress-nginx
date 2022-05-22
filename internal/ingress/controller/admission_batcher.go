@@ -95,6 +95,7 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 		n.admissionBatcher.mu.Unlock()
 
 		time.Sleep(admissionDelay)
+		klog.Info("AdmissionBatcher: admission delay passed, now fetching some ingresses")
 		newIngresses, errorChannels := n.admissionBatcher.fetchNewBatch()
 		if len(newIngresses) != 0 {
 			var logmsg strings.Builder
@@ -114,6 +115,8 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 
 		n.admissionBatcher.mu.Lock()
 	}
+
+	klog.Info("Admission batcher routine finished")
 }
 
 func groupByNamespacesAndNames(ingresses []*networking.Ingress) map[Namespace]map[Name]struct{} {
