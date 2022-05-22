@@ -222,5 +222,6 @@ func (ab *AdmissionBatcher) ValidateIngress(ing *networking.Ingress) error {
 
 	ab.mu.Unlock()
 
+	klog.Info("Ingress", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name), "submitted for batch validation, waiting for verdict...")
 	return <-errCh
 }
