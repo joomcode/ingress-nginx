@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"go.uber.org/atomic"
 	networking "k8s.io/api/networking/v1beta1"
 	"k8s.io/ingress-nginx/internal/ingress"
 	"k8s.io/ingress-nginx/internal/ingress/annotations"
@@ -23,24 +22,9 @@ const (
 	admissionDelay = 5 * time.Second
 )
 
-type AdmissionQueue struct {
-	// buffered channel of ingresses awaiting to be processed
+type AdmissionBatcher struct {
 	ingresses     []*networking.Ingress
 	errorChannels []chan error
-}
-
-func NewAdmissionQueue() *AdmissionQueue {
-	return &AdmissionQueue{
-		ingresses:     nil,
-		errorChannels: nil,
-	}
-}
-
-type AdmissionBatcher struct {
-	queues [2]*AdmissionQueue
-
-	// index of queue that is not being processed right now
-	freeQueueIdx atomic.Int32
 
 	// flag for consumer goroutine indicating whether it should keep processing or not
 	isWorking bool
@@ -54,11 +38,11 @@ type AdmissionBatcher struct {
 
 func NewAdmissionBatcher() AdmissionBatcher {
 	return AdmissionBatcher{
-		queues:       [2]*AdmissionQueue{NewAdmissionQueue(), NewAdmissionQueue()},
-		freeQueueIdx: atomic.Int32{},
-		isWorking:    true,
-		mu:           &sync.Mutex{},
-		consumerWG:   sync.WaitGroup{},
+		ingresses:     nil,
+		errorChannels: nil,
+		isWorking:     true,
+		mu:            &sync.Mutex{},
+		consumerWG:    sync.WaitGroup{},
 	}
 }
 
@@ -67,18 +51,6 @@ func (ab *AdmissionBatcher) Shutdown() {
 	defer ab.mu.Unlock()
 
 	ab.isWorking = false
-}
-
-func (ab *AdmissionBatcher) freeQueue() *AdmissionQueue {
-	return ab.queues[ab.freeQueueIdx.Load()]
-}
-
-func (ab *AdmissionBatcher) nextFreeQueue() *AdmissionQueue {
-	return ab.queues[1-ab.freeQueueIdx.Load()]
-}
-
-func (ab *AdmissionBatcher) swapQueues() {
-	ab.freeQueueIdx.Store(1 - ab.freeQueueIdx.Load())
 }
 
 // AdmissionBatcherConsumerRoutine is started during ingress-controller startup phase
@@ -208,10 +180,13 @@ func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorCh
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
-	freeQueue := ab.freeQueue()
+	if len(ab.ingresses) == 0 {
+		klog.Info("No new ingresses found by admission batcher routine")
+		return nil, nil
+	}
 
-	ings = freeQueue.ingresses
-	errorChannels = freeQueue.errorChannels
+	ings = ab.ingresses
+	errorChannels = ab.errorChannels
 
 	// debug
 	var sb strings.Builder
@@ -221,10 +196,8 @@ func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorCh
 	}
 	klog.Info(sb.String())
 
-	freeQueue.errorChannels = nil
-	freeQueue.ingresses = nil
-
-	ab.swapQueues()
+	ab.errorChannels = nil
+	ab.ingresses = nil
 
 	return ings, errorChannels
 }
@@ -232,11 +205,10 @@ func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorCh
 func (ab *AdmissionBatcher) ValidateIngress(ing *networking.Ingress) error {
 	ab.mu.Lock()
 
-	freeQueue := ab.freeQueue()
-	freeQueue.ingresses = append(freeQueue.ingresses, ing)
+	ab.ingresses = append(ab.ingresses, ing)
 
 	errCh := make(chan error)
-	freeQueue.errorChannels = append(freeQueue.errorChannels, errCh)
+	ab.errorChannels = append(ab.errorChannels, errCh)
 
 	ab.mu.Unlock()
 
