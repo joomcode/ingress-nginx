@@ -173,7 +173,7 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 
 	var ingsListSB strings.Builder
 	for _, ing := range newIngresses {
-		ingsListSB.WriteString(fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
+		ingsListSB.WriteString(fmt.Sprintf("%v/%v ", ing.Namespace, ing.Name))
 	}
 	ingsListStr := ingsListSB.String()
 
@@ -211,6 +211,12 @@ func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorCh
 	ings = freeQueue.ingresses
 	errorChannels = freeQueue.errorChannels
 
+	var sb strings.Builder
+	sb.WriteString("Fetched new batch of ingresses: ")
+	for _, ing := range ings {
+		sb.WriteString(fmt.Sprintf("%s/%s", ing.Namespace, ing.Name))
+	}
+
 	freeQueue.errorChannels = nil
 	freeQueue.ingresses = nil
 
@@ -230,6 +236,6 @@ func (ab *AdmissionBatcher) ValidateIngress(ing *networking.Ingress) error {
 
 	ab.mu.Unlock()
 
-	klog.Info("Ingress", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name), "submitted for batch validation, waiting for verdict...")
+	klog.Info("Ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name), " submitted for batch validation, waiting for verdict...")
 	return <-errCh
 }
