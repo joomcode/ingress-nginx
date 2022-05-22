@@ -91,7 +91,7 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 }
 
 func groupByNamespacesAndNames(ingresses []*networking.Ingress) map[Namespace]map[Name]struct{} {
-	var grouped map[Namespace]map[Name]struct{}
+	grouped := make(map[Namespace]map[Name]struct{})
 
 	for _, ing := range ingresses {
 		ns := Namespace(ing.ObjectMeta.Namespace)
