@@ -171,6 +171,13 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 		}
 	}
 
+	var ingsListSB strings.Builder
+	for _, ing := range newIngresses {
+		ingsListSB.WriteString(fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
+	}
+	ingsListStr := ingsListSB.String()
+
+	klog.Info("Generating nginx template with new ingresses: ", ingsListStr)
 	template, err := n.generateTemplate(cfg, *newIngCfg)
 	if err != nil {
 		for _, ing := range newIngresses {
@@ -179,6 +186,7 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 		return errors.Wrap(err, "error while validating batch of ingresses")
 	}
 
+	klog.Info("Testing nginx template with new ingresses: ", ingsListStr)
 	err = n.testTemplate(template)
 	if err != nil {
 		for _, ing := range newIngresses {
