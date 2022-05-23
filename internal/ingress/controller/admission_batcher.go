@@ -19,7 +19,7 @@ type Name string
 
 const (
 	// time of batch collecting
-	admissionDelay = 5 * time.Second
+	admissionDelay = 8 * time.Second
 )
 
 type AdmissionBatcher struct {
