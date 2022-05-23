@@ -77,10 +77,8 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 			klog.Info(logmsg.String())
 
 			err := n.validateNewIngresses(newIngresses)
-			if err != nil {
-				for _, erCh := range errorChannels {
-					erCh <- err
-				}
+			for _, erCh := range errorChannels {
+				erCh <- err
 			}
 		}
 
@@ -125,14 +123,28 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 		return nameMatchesAny
 	})
 
+	//debug
+	var ingsListSB strings.Builder
+	for _, ing := range newIngresses {
+		ingsListSB.WriteString(fmt.Sprintf("%v/%v ", ing.Namespace, ing.Name))
+	}
+	ingsListStr := ingsListSB.String()
+
+	klog.Info("Similar ingresses filtered for ", ingsListStr)
+
+	annotationsExtractor := annotations.NewAnnotationExtractor(n.store)
 	for _, ing := range newIngresses {
 		ings = append(ings, &ingress.Ingress{
 			Ingress:           *ing,
-			ParsedAnnotations: annotations.NewAnnotationExtractor(n.store).Extract(ing),
+			ParsedAnnotations: annotationsExtractor.Extract(ing),
 		})
 	}
+	//debug
+	klog.Info("New ingresses with annotations appended for ", ingsListStr)
 
 	_, servers, newIngCfg := n.getConfiguration(ings)
+	//debug
+	klog.Info("Configuration generated for ", ingsListStr)
 
 	var err error
 	for _, ing := range newIngresses {
@@ -144,12 +156,8 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 			return errors.Wrap(err, "error while validating batch of ingresses")
 		}
 	}
-
-	var ingsListSB strings.Builder
-	for _, ing := range newIngresses {
-		ingsListSB.WriteString(fmt.Sprintf("%v/%v ", ing.Namespace, ing.Name))
-	}
-	ingsListStr := ingsListSB.String()
+	//debug
+	klog.Info("Checked overlapping for ", ingsListStr)
 
 	klog.Info("Generating nginx template with new ingresses: ", ingsListStr)
 	template, err := n.generateTemplate(cfg, *newIngCfg)
