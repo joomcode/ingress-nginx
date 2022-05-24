@@ -19,7 +19,11 @@ type Name string
 
 const (
 	// time of batch collecting
-	admissionDelay = 8 * time.Second
+	admissionDelaySeconds = 5
+	admissionDelay        = admissionDelaySeconds * time.Second
+
+	// amount of concurrent batch consumers
+	batchConsumerCount = 30 / admissionDelaySeconds
 )
 
 type AdmissionBatcher struct {
@@ -34,6 +38,9 @@ type AdmissionBatcher struct {
 
 	// wait group to monitor consumer goroutine lifetime
 	consumerWG sync.WaitGroup
+
+	// when was last not empty batch consumed by some worker for validation
+	lastBatchConsumedTime time.Time
 }
 
 func NewAdmissionBatcher() AdmissionBatcher {
@@ -46,11 +53,17 @@ func NewAdmissionBatcher() AdmissionBatcher {
 	}
 }
 
-func (ab *AdmissionBatcher) Shutdown() {
-	ab.mu.Lock()
-	defer ab.mu.Unlock()
+func (n *NGINXController) StartAdmissionBatcher() {
+	for i := 0; i < batchConsumerCount; i++ {
+		go n.AdmissionBatcherConsumerRoutine()
+	}
+}
 
-	ab.isWorking = false
+func (n *NGINXController) StopAdmissionBatcher() {
+	n.admissionBatcher.mu.Lock()
+	defer n.admissionBatcher.mu.Unlock()
+
+	n.admissionBatcher.isWorking = false
 }
 
 // AdmissionBatcherConsumerRoutine is started during ingress-controller startup phase
@@ -64,18 +77,12 @@ func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 	// prevent races on isWorking field
 	n.admissionBatcher.mu.Lock()
 	for n.admissionBatcher.isWorking {
+		timeSinceLastBatchPull := time.Now().Sub(n.admissionBatcher.lastBatchConsumedTime)
 		n.admissionBatcher.mu.Unlock()
 
-		time.Sleep(admissionDelay)
+		time.Sleep(max(time.Duration(0), admissionDelay-timeSinceLastBatchPull))
 		newIngresses, errorChannels := n.admissionBatcher.fetchNewBatch()
 		if len(newIngresses) != 0 {
-			var logmsg strings.Builder
-			logmsg.WriteString("Received new batch of ingresses for validation: ")
-			for _, ing := range newIngresses {
-				logmsg.WriteString(fmt.Sprintf("%s/%s ", ing.ObjectMeta.Namespace, ing.ObjectMeta.Name))
-			}
-			klog.Info(logmsg.String())
-
 			err := n.validateNewIngresses(newIngresses)
 			for _, erCh := range errorChannels {
 				erCh <- err
@@ -123,14 +130,11 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 		return nameMatchesAny
 	})
 
-	//debug
 	var ingsListSB strings.Builder
 	for _, ing := range newIngresses {
 		ingsListSB.WriteString(fmt.Sprintf("%v/%v ", ing.Namespace, ing.Name))
 	}
 	ingsListStr := ingsListSB.String()
-
-	klog.Info("Similar ingresses filtered for ", ingsListStr)
 
 	annotationsExtractor := annotations.NewAnnotationExtractor(n.store)
 	for _, ing := range newIngresses {
@@ -142,10 +146,12 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 	//debug
 	klog.Info("New ingresses with annotations appended for ", ingsListStr)
 
+	start := time.Now()
 	_, servers, newIngCfg := n.getConfiguration(ings)
 	//debug
-	klog.Info("Configuration generated for ", ingsListStr)
+	klog.Info("Configuration generated in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
+	start = time.Now()
 	var err error
 	for _, ing := range newIngresses {
 		err = checkOverlap(ing, servers)
@@ -157,9 +163,9 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 		}
 	}
 	//debug
-	klog.Info("Checked overlapping for ", ingsListStr)
+	klog.Info("Checked overlapping in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
-	klog.Info("Generating nginx template with new ingresses: ", ingsListStr)
+	start = time.Now()
 	template, err := n.generateTemplate(cfg, *newIngCfg)
 	if err != nil {
 		for _, ing := range newIngresses {
@@ -167,8 +173,10 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 		}
 		return errors.Wrap(err, "error while validating batch of ingresses")
 	}
+	//debug
+	klog.Info("Generated nginx template in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
-	klog.Info("Testing nginx template with new ingresses: ", ingsListStr)
+	start = time.Now()
 	err = n.testTemplate(template)
 	if err != nil {
 		for _, ing := range newIngresses {
@@ -176,6 +184,8 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 		}
 		return errors.Wrap(err, "error while validating batch of ingresses")
 	}
+	//debug
+	klog.Info("Tested nginx template in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
 	for _, ing := range newIngresses {
 		n.metricCollector.IncCheckCount(ing.ObjectMeta.Namespace, ing.Name)
@@ -189,7 +199,6 @@ func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorCh
 	defer ab.mu.Unlock()
 
 	if len(ab.ingresses) == 0 {
-		klog.Info("No new ingresses found by admission batcher routine")
 		return nil, nil
 	}
 
@@ -207,6 +216,8 @@ func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorCh
 	ab.errorChannels = nil
 	ab.ingresses = nil
 
+	ab.lastBatchConsumedTime = time.Now()
+
 	return ings, errorChannels
 }
 
@@ -223,4 +234,11 @@ func (ab *AdmissionBatcher) ValidateIngress(ing *networking.Ingress) error {
 	// debug
 	klog.Info("Ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name), " submitted for batch validation, waiting for verdict...")
 	return <-errCh
+}
+
+func max(d1, d2 time.Duration) time.Duration {
+	if d1 < d2 {
+		return d2
+	}
+	return d1
 }

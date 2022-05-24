@@ -324,7 +324,7 @@ func (n *NGINXController) Start() {
 		}()
 	}
 
-	go n.AdmissionBatcherConsumerRoutine()
+	n.StartAdmissionBatcher()
 
 	for {
 		select {
@@ -373,7 +373,7 @@ func (n *NGINXController) Stop() error {
 		return fmt.Errorf("shutdown already in progress")
 	}
 
-	n.admissionBatcher.Shutdown()
+	n.StopAdmissionBatcher()
 
 	time.Sleep(time.Duration(n.cfg.ShutdownGracePeriod) * time.Second)
 
