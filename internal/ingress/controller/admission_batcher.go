@@ -19,7 +19,7 @@ type Name string
 
 const (
 	// time of batch collecting
-	admissionDelaySeconds = 5
+	admissionDelaySeconds = 3
 	admissionDelay        = admissionDelaySeconds * time.Second
 
 	// amount of concurrent batch consumers
@@ -162,8 +162,6 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 			return errors.Wrap(err, "error while validating batch of ingresses")
 		}
 	}
-	//debug
-	klog.Info("Checked overlapping in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
 	start = time.Now()
 	template, err := n.generateTemplate(cfg, *newIngCfg)
