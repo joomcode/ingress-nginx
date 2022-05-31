@@ -415,11 +415,21 @@ func (n *NGINXController) getDefaultUpstream() *ingress.Backend {
 
 // getConfiguration returns the configuration matching the standard kubernetes ingress
 func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.String, []*ingress.Server, *ingress.Configuration) {
+	var ingsListSB strings.Builder
+	for _, ing := range ingresses {
+		ingsListSB.WriteString(fmt.Sprintf("%v/%v ", ing.Namespace, ing.Name))
+	}
+	ingsListStr := ingsListSB.String()
+
+	start := time.Now()
 	upstreams, servers := n.getBackendServers(ingresses)
+	klog.Info("Got backend servers in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
+
 	var passUpstreams []*ingress.SSLPassthroughBackend
 
 	hosts := sets.NewString()
 
+	start = time.Now()
 	for _, server := range servers {
 		// If a location is defined by a prefix string that ends with the slash character, and requests are processed by one of
 		// proxy_pass, fastcgi_pass, uwsgi_pass, scgi_pass, memcached_pass, or grpc_pass, then the special processing is performed.
@@ -463,6 +473,8 @@ func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.S
 			break
 		}
 	}
+
+	klog.Info("Collected info about passupstreams in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
 	return hosts, servers, &ingress.Configuration{
 		Backends:              upstreams,
@@ -750,11 +762,11 @@ func (n *NGINXController) getBackendServers(ingresses []*ingress.Ingress) ([]*in
 
 // createUpstreams creates the NGINX upstreams (Endpoints) for each Service
 // referenced in Ingress rules.
-func (n *NGINXController) createUpstreams(data []*ingress.Ingress, du *ingress.Backend) map[string]*ingress.Backend {
+func (n *NGINXController) createUpstreams(ingresses []*ingress.Ingress, du *ingress.Backend) map[string]*ingress.Backend {
 	upstreams := make(map[string]*ingress.Backend)
 	upstreams[defUpstreamName] = du
 
-	for _, ing := range data {
+	for _, ing := range ingresses {
 		anns := ing.ParsedAnnotations
 
 		var defBackend string
