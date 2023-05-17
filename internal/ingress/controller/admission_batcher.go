@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	networking "k8s.io/api/networking/v1beta1"
-	"k8s.io/ingress-nginx/internal/ingress"
+	networking "k8s.io/api/networking/v1"
 	"k8s.io/ingress-nginx/internal/ingress/annotations"
 	"k8s.io/ingress-nginx/internal/ingress/controller/store"
+	"k8s.io/ingress-nginx/pkg/apis/ingress"
 	"k8s.io/klog/v2"
 )
 
@@ -154,7 +154,7 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 	start = time.Now()
 	var err error
 	for _, ing := range newIngresses {
-		err = checkOverlap(ing, servers)
+		err = checkOverlap(ing, ings, servers)
 		if err != nil {
 			for _, ing := range newIngresses {
 				n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)

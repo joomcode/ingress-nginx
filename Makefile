@@ -44,7 +44,7 @@ BUILD_ID ?= "UNSET"
 PKG = k8s.io/ingress-nginx
 
 HOST_ARCH = $(shell which go >/dev/null 2>&1 && go env GOARCH)
-ARCH ?= amd64
+ARCH ?= $(HOST_ARCH)
 ifeq ($(ARCH),)
     $(error mandatory variable ARCH is empty, either set it when calling the command or make sure 'go env GOARCH' works)
 endif
@@ -61,7 +61,7 @@ else
 	MAC_DOCKER_FLAGS=
 endif
 
-REGISTRY ?= jfrog.joom.it/docker-registry/test-rationalex/ingress-nginx
+REGISTRY ?= gcr.io/k8s-staging-ingress-nginx
 
 BASE_IMAGE ?= $(shell cat NGINX_BASE)
 
@@ -238,7 +238,7 @@ ensure-buildx:
 show-version:
 	echo -n $(TAG)
 
-PLATFORMS ?= amd64 # arm arm64 s390x
+PLATFORMS ?= amd64 arm arm64 s390x
 BUILDX_PLATFORMS ?= linux/amd64,linux/arm,linux/arm64,linux/s390x
 
 .PHONY: release # Build a multi-arch docker image
