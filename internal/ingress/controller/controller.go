@@ -317,30 +317,23 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 		ParsedAnnotations: annotations.NewAnnotationExtractor(n.store).Extract(ing),
 	})
 	startTest := time.Now().UnixNano() / 1000000
-	_, servers, pcfg := n.getConfiguration(ings)
+	_, servers, _ := n.getConfiguration(ings)
 
 	err := checkOverlap(ing, allIngresses, servers)
 	if err != nil {
 		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
 		return err
 	}
+
+	klog.Info("starting validation of ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
+	err = n.admissionBatcher.ValidateIngress(ing)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
+	}
+
 	testedSize := len(ings)
-	if n.cfg.DisableFullValidationTest {
-		_, _, pcfg = n.getConfiguration(ings[len(ings)-1:])
-		testedSize = 1
-	}
 
-	content, err := n.generateTemplate(cfg, *pcfg)
-	if err != nil {
-		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		return err
-	}
-
-	err = n.testTemplate(content)
-	if err != nil {
-		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		return err
-	}
 	n.metricCollector.IncCheckCount(ing.ObjectMeta.Namespace, ing.Name)
 	endCheck := time.Now().UnixNano() / 1000000
 	n.metricCollector.SetAdmissionMetrics(
@@ -348,12 +341,12 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 		float64(endCheck-startTest)/1000,
 		float64(len(ings)),
 		float64(startTest-startRender)/1000,
-		float64(len(content)),
+		//can't calculate content properly because of batching
+		float64(0),
 		float64(endCheck-startCheck)/1000,
 	)
 
-	klog.Info("starting validation of ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
-	return n.admissionBatcher.ValidateIngress(ing)
+	return nil
 }
 
 func (n *NGINXController) getStreamServices(configmapName string, proto apiv1.Protocol) []ingress.L4Service {

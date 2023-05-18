@@ -147,28 +147,13 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 	klog.Info("New ingresses with annotations appended for ", ingsListStr)
 
 	start := time.Now()
-	_, servers, newIngCfg := n.getConfiguration(ings)
+	_, _, newIngCfg := n.getConfiguration(ings)
 	//debug
 	klog.Info("Configuration generated in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
 	start = time.Now()
-	var err error
-	for _, ing := range newIngresses {
-		err = checkOverlap(ing, ings, servers)
-		if err != nil {
-			for _, ing := range newIngresses {
-				n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-			}
-			return errors.Wrap(err, "error while validating batch of ingresses")
-		}
-	}
-
-	start = time.Now()
 	template, err := n.generateTemplate(cfg, *newIngCfg)
 	if err != nil {
-		for _, ing := range newIngresses {
-			n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		}
 		return errors.Wrap(err, "error while validating batch of ingresses")
 	}
 	//debug
@@ -177,17 +162,10 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 	start = time.Now()
 	err = n.testTemplate(template)
 	if err != nil {
-		for _, ing := range newIngresses {
-			n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		}
 		return errors.Wrap(err, "error while validating batch of ingresses")
 	}
 	//debug
 	klog.Info("Tested nginx template in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
-
-	for _, ing := range newIngresses {
-		n.metricCollector.IncCheckCount(ing.ObjectMeta.Namespace, ing.Name)
-	}
 
 	return nil
 }
