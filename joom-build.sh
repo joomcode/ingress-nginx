@@ -20,4 +20,4 @@ docker buildx build --no-cache --platform=linux/amd64 \
  -t "${REGISTRY}:${TAG}" rootfs \
  --load
 
-#docker push "${REGISTRY}:${TAG}"
+docker push "${REGISTRY}:${TAG}"
