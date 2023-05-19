@@ -109,6 +109,8 @@ func NewNGINXController(config *Configuration, mc metric.Collector) *NGINXContro
 		metricCollector: mc,
 
 		command: NewNginxCommand(),
+
+		admissionBatcher: NewAdmissionBatcher(),
 	}
 
 	if n.cfg.ValidationWebhook != "" {
@@ -258,6 +260,8 @@ type NGINXController struct {
 	validationWebhookServer *http.Server
 
 	command NginxExecTester
+
+	admissionBatcher AdmissionBatcher
 }
 
 // Start starts a new NGINX master process running in the foreground.
@@ -332,6 +336,8 @@ func (n *NGINXController) Start() {
 		}()
 	}
 
+	n.StartAdmissionBatcher()
+
 	for {
 		select {
 		case err := <-n.ngxErrCh:
@@ -378,6 +384,8 @@ func (n *NGINXController) Stop() error {
 	if n.syncQueue.IsShuttingDown() {
 		return fmt.Errorf("shutdown already in progress")
 	}
+
+	n.StopAdmissionBatcher()
 
 	time.Sleep(time.Duration(n.cfg.ShutdownGracePeriod) * time.Second)
 
@@ -445,7 +453,7 @@ func (n *NGINXController) DefaultEndpoint() ingress.Endpoint {
 // generateTemplate returns the nginx configuration file content
 //
 //nolint:gocritic // the cfg shouldn't be changed, and shouldn't be mutated by other processes while being rendered.
-func (n *NGINXController) generateTemplate(cfg ngx_config.Configuration, ingressCfg ingress.Configuration) ([]byte, error) {
+func (n **NGINXController) generateTemplate(cfg ngx_config.Configuration, ingressCfg ingress.Configuration) ([]byte, error) {
 	if n.cfg.EnableSSLPassthrough {
 		servers := []*tcpproxy.TCPServer{}
 		for _, pb := range ingressCfg.PassthroughBackends {
