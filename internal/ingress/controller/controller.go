@@ -38,6 +38,7 @@ import (
 	"k8s.io/ingress-nginx/internal/ingress/annotations/parser"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/proxy"
 	ngx_config "k8s.io/ingress-nginx/internal/ingress/controller/config"
+	"k8s.io/ingress-nginx/internal/ingress/controller/store"
 	"k8s.io/ingress-nginx/internal/ingress/errors"
 	"k8s.io/ingress-nginx/internal/k8s"
 	"k8s.io/ingress-nginx/internal/nginx"
@@ -253,6 +254,25 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 				return fmt.Errorf("'global-rate-limit*' annotations require 'global-rate-limit-memcached-host' settings configured in the global configmap")
 			}
 		}
+	}
+
+	allIngresses := n.store.ListIngresses()
+
+	filter := func(toCheck *ingress.Ingress) bool {
+		return toCheck.ObjectMeta.Namespace == ing.ObjectMeta.Namespace &&
+			toCheck.ObjectMeta.Name == ing.ObjectMeta.Name
+	}
+	ings := store.FilterIngresses(allIngresses, filter)
+	ings = append(ings, &ingress.Ingress{
+		Ingress:           *ing,
+		ParsedAnnotations: annotations.NewAnnotationExtractor(n.store).Extract(ing),
+	})
+	_, servers, _ := n.getConfiguration(ings)
+
+	err := checkOverlap(ing, servers)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
 	}
 
 	klog.Info("starting validation of ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
