@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <testsuites tests="1" disabled="0" errors="0" failures="0" time="19.728293306">
+      <testsuite name="nginx-ingress-controller e2e suite" package="/" tests="1" disabled="0" skipped="0" errors="0" failures="0" time="19.728293306" timestamp="2023-07-16T17:53:35">
+          <properties>
+              <property name="SuiteSucceeded" value="true"></property>
+              <property name="SuiteHasProgrammaticFocus" value="false"></property>
+              <property name="SpecialSuiteFailureReason" value=""></property>
+              <property name="SuiteLabels" value="[]"></property>
+              <property name="RandomSeed" value="1689530015"></property>
+              <property name="RandomizeAllSpecs" value="true"></property>
+              <property name="LabelFilter" value=""></property>
+              <property name="FocusStrings" value=""></property>
+              <property name="SkipStrings" value="\[Memory Leak\]"></property>
+              <property name="FocusFiles" value=""></property>
+              <property name="SkipFiles" value=""></property>
+              <property name="FailOnPending" value="false"></property>
+              <property name="FailFast" value="true"></property>
+              <property name="FlakeAttempts" value="2"></property>
+              <property name="DryRun" value="false"></property>
+              <property name="ParallelTotal" value="7"></property>
+              <property name="OutputInterceptorMode" value=""></property>
+          </properties>
+          <testcase name="[It] [CGroups] cgroups detects if cgroups is avaliable" classname="nginx-ingress-controller e2e suite" status="passed" time="19.672628459">
+              <system-err>&gt; Enter [BeforeEach] [CGroups] cgroups - /go/src/k8s.io/ingress-nginx/test/e2e/framework/framework.go:83 @ 07/16/23 17:53:35.472&#xA;&lt; Exit [BeforeEach] [CGroups] cgroups - /go/src/k8s.io/ingress-nginx/test/e2e/framework/framework.go:83 @ 07/16/23 17:53:42.61 (7.137s)&#xA;&gt; Enter [BeforeEach] [CGroups] cgroups - /go/src/k8s.io/ingress-nginx/test/e2e/cgroups/cgroups_linux.go:37 @ 07/16/23 17:53:42.61&#xA;&lt; Exit [BeforeEach] [CGroups] cgroups - /go/src/k8s.io/ingress-nginx/test/e2e/cgroups/cgroups_linux.go:37 @ 07/16/23 17:53:54.745 (12.135s)&#xA;&gt; Enter [It] detects if cgroups is avaliable - /go/src/k8s.io/ingress-nginx/test/e2e/cgroups/cgroups_linux.go:42 @ 07/16/23 17:53:54.745&#xA;&lt; Exit [It] detects if cgroups is avaliable - /go/src/k8s.io/ingress-nginx/test/e2e/cgroups/cgroups_linux.go:42 @ 07/16/23 17:53:54.745 (0s)&#xA;&gt; Enter [AfterEach] [CGroups] cgroups - /go/src/k8s.io/ingress-nginx/test/e2e/framework/framework.go:84 @ 07/16/23 17:53:54.745&#xA;&lt; Exit [AfterEach] [CGroups] cgroups - /go/src/k8s.io/ingress-nginx/test/e2e/framework/framework.go:84 @ 07/16/23 17:53:55.145 (400ms)&#xA;</system-err>
+          </testcase>
+      </testsuite>
+  </testsuites>

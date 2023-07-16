@@ -38,7 +38,7 @@ import (
 func NumCPU() int {
 	cpus := runtime.NumCPU()
 
-	cgroupVersion := getCgroupVersion()
+	cgroupVersion := GetCgroupVersion()
 	cpuQuota := int64(-1)
 	cpuPeriod := int64(-1)
 
@@ -60,7 +60,11 @@ func NumCPU() int {
 	return int(math.Ceil(float64(cpuQuota) / float64(cpuPeriod)))
 }
 
-func getCgroupVersion() int64 {
+func IsCgroupAvaliable() bool {
+	return true
+}
+
+func GetCgroupVersion() int64 {
 	// /sys/fs/cgroup/cgroup.controllers will not exist with cgroupsv1
 	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err == nil {
 		return 2
@@ -93,7 +97,7 @@ func readCgroup2FileToInt64Tuple(cgroupFile string) (int64, int64) {
 	}
 
 	if len(values) == 1 {
-		return cpuQuota, 100000
+		return cpuQuota, 1
 	}
 
 	cpuPeriod, err := strconv.ParseInt(values[1], 10, 64)
