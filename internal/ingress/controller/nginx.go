@@ -453,7 +453,7 @@ func (n *NGINXController) DefaultEndpoint() ingress.Endpoint {
 // generateTemplate returns the nginx configuration file content
 //
 //nolint:gocritic // the cfg shouldn't be changed, and shouldn't be mutated by other processes while being rendered.
-func (n **NGINXController) generateTemplate(cfg ngx_config.Configuration, ingressCfg ingress.Configuration) ([]byte, error) {
+func (n *NGINXController) generateTemplate(cfg ngx_config.Configuration, ingressCfg ingress.Configuration) ([]byte, error) {
 	if n.cfg.EnableSSLPassthrough {
 		servers := []*tcpproxy.TCPServer{}
 		for _, pb := range ingressCfg.PassthroughBackends {
