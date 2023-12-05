@@ -18,64 +18,81 @@ type Namespace string
 type Name string
 
 const (
-	batchDelay = 4 * time.Second
+	// time of batch collecting
+	admissionDelaySeconds = 3
+	admissionDelay        = admissionDelaySeconds * time.Second
+
+	// amount of concurrent batch consumers
+	batchConsumerCount = 30 / admissionDelaySeconds
 )
 
 type AdmissionBatcher struct {
-	ingresses     map[Namespace][]*networking.Ingress
-	isOnBatching  map[Namespace]bool
-	errorChannels map[Namespace][]chan error
-	isWorking     bool
-	isWorkingMU   *sync.Mutex
-	workerMU      *sync.Mutex
-	consumerWG    sync.WaitGroup
+	ingresses     []*networking.Ingress
+	errorChannels []chan error
+
+	// flag for consumer goroutine indicating whether it should keep processing or not
+	isWorking bool
+
+	// mutex protecting queues access
+	mu *sync.Mutex
+
+	// wait group to monitor consumer goroutine lifetime
+	consumerWG sync.WaitGroup
+
+	// when was last not empty batch consumed by some worker for validation
+	lastBatchConsumedTime time.Time
 }
 
 func NewAdmissionBatcher() AdmissionBatcher {
 	return AdmissionBatcher{
-		ingresses:     map[Namespace][]*networking.Ingress{},
-		isOnBatching:  map[Namespace]bool{},
-		errorChannels: map[Namespace][]chan error{},
+		ingresses:     nil,
+		errorChannels: nil,
 		isWorking:     true,
-		isWorkingMU:   &sync.Mutex{},
-		workerMU:      &sync.Mutex{},
+		mu:            &sync.Mutex{},
 		consumerWG:    sync.WaitGroup{},
 	}
 }
 
 func (n *NGINXController) StartAdmissionBatcher() {
-	n.admissionBatcher.setWork(true)
-	go n.BatchConsumerRoutine()
+	for i := 0; i < batchConsumerCount; i++ {
+		go n.AdmissionBatcherConsumerRoutine()
+	}
 }
 
 func (n *NGINXController) StopAdmissionBatcher() {
-	n.admissionBatcher.setWork(false)
-	n.admissionBatcher.consumerWG.Wait()
+	n.admissionBatcher.mu.Lock()
+	defer n.admissionBatcher.mu.Unlock()
+
+	n.admissionBatcher.isWorking = false
 }
 
-func (n *NGINXController) BatchConsumerRoutine() {
+// AdmissionBatcherConsumerRoutine is started during ingress-controller startup phase
+// And it should stop during ingress-controller's graceful shutdown
+func (n *NGINXController) AdmissionBatcherConsumerRoutine() {
 	n.admissionBatcher.consumerWG.Add(1)
 	defer n.admissionBatcher.consumerWG.Done()
 
-	for n.admissionBatcher.isWork() {
-		ns, ok := n.admissionBatcher.hasNewIngresses()
-		if !ok {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		klog.Info("Start waiting for batch, namespace: ", ns)
-		go n.BatchConsumerRoutine()
-		time.Sleep(batchDelay)
-		newIngresses, errorChannels := n.admissionBatcher.fetchNewBatch(ns)
+	klog.Info("Admission batcher routine started")
 
-		if len(newIngresses) > 0 {
+	// prevent races on isWorking field
+	n.admissionBatcher.mu.Lock()
+	for n.admissionBatcher.isWorking {
+		timeSinceLastBatchPull := time.Now().Sub(n.admissionBatcher.lastBatchConsumedTime)
+		n.admissionBatcher.mu.Unlock()
+
+		time.Sleep(max(time.Duration(0), admissionDelay-timeSinceLastBatchPull))
+		newIngresses, errorChannels := n.admissionBatcher.fetchNewBatch()
+		if len(newIngresses) != 0 {
 			err := n.validateNewIngresses(newIngresses)
 			for _, erCh := range errorChannels {
 				erCh <- err
 			}
 		}
-		return
+
+		n.admissionBatcher.mu.Lock()
 	}
+
+	klog.Info("Admission batcher routine finished")
 }
 
 func groupByNamespacesAndNames(ingresses []*networking.Ingress) map[Namespace]map[Name]struct{} {
@@ -130,126 +147,78 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 			ParsedAnnotations: ann,
 		})
 	}
-
+	//debug
 	klog.Info("New ingresses with annotations appended for ", ingsListStr)
 
-	startTest := time.Now().UnixNano() / 1000000
 	start := time.Now()
-
-	_, servers, newIngCfg := n.getConfiguration(ings)
+	_, _, newIngCfg := n.getConfiguration(ings)
+	//debug
 	klog.Info("Configuration generated in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
-
-	for _, newIngress := range newIngresses {
-		err := checkOverlap(newIngress, servers)
-		if err != nil {
-			return errors.Wrapf(err, "error while validating overlap for ingress %s/%s", newIngress.Namespace, newIngress.Name)
-		}
-	}
 
 	start = time.Now()
 	template, err := n.generateTemplate(cfg, *newIngCfg)
 	if err != nil {
-		return errors.Wrapf(err, "error while generating template for ingresses %s", ingsListStr)
+		return errors.Wrap(err, "error while validating batch of ingresses")
 	}
+	//debug
 	klog.Info("Generated nginx template in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
 	start = time.Now()
 	err = n.testTemplate(template)
 	if err != nil {
-		return errors.Wrapf(err, "error while testing template for of ingresses %s", ingsListStr)
+		return errors.Wrap(err, "error while validating batch of ingresses")
 	}
+	//debug
 	klog.Info("Tested nginx template in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
-	endCheck := time.Now().UnixNano() / 1000000
-
-	testedSize := len(ings)
-	confSize := len(template)
-	n.metricCollector.SetAdmissionMetrics(
-		float64(testedSize),
-		float64(endCheck-startTest)/1000,
-		float64(len(ings)),
-		//can't calculate content properly because of batching
-		0,
-		float64(confSize),
-		//can't calculate content properly because of batching
-		0,
-	)
 	return nil
 }
 
-func (ab *AdmissionBatcher) setWork(status bool) {
-	ab.isWorkingMU.Lock()
-	defer ab.isWorkingMU.Unlock()
-
-	ab.isWorking = status
-}
-
-func (ab *AdmissionBatcher) isWork() bool {
-	ab.isWorkingMU.Lock()
-	defer ab.isWorkingMU.Unlock()
-
-	return ab.isWorking
-}
-
-func (ab *AdmissionBatcher) hasNewIngresses() (Namespace, bool) {
-	ab.isWorkingMU.Lock()
-	defer ab.isWorkingMU.Unlock()
-
-	for ns, b := range ab.isOnBatching {
-		if !b {
-			ab.isOnBatching[ns] = true
-			return ns, true
-		}
-	}
-	return "", false
-}
-
-func (ab *AdmissionBatcher) fetchNewBatch(namespace Namespace) (ings []*networking.Ingress, errorChannels []chan error) {
-	ab.isWorkingMU.Lock()
-	defer ab.isWorkingMU.Unlock()
+func (ab *AdmissionBatcher) fetchNewBatch() (ings []*networking.Ingress, errorChannels []chan error) {
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
 
 	if len(ab.ingresses) == 0 {
 		return nil, nil
 	}
 
-	ings = ab.ingresses[namespace]
-	errorChannels = ab.errorChannels[namespace]
+	ings = ab.ingresses
+	errorChannels = ab.errorChannels
 
+	// debug
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprint("Fetched new batch of ingresses for ns: ", namespace))
+	sb.WriteString("Fetched new batch of ingresses: ")
 	for _, ing := range ings {
-		sb.WriteString(fmt.Sprintf(" %s", ing.Name))
+		sb.WriteString(fmt.Sprintf("%s/%s ", ing.Namespace, ing.Name))
 	}
 	klog.Info(sb.String())
 
-	delete(ab.errorChannels, namespace)
-	delete(ab.ingresses, namespace)
-	delete(ab.isOnBatching, namespace)
+	ab.errorChannels = nil
+	ab.ingresses = nil
+
+	ab.lastBatchConsumedTime = time.Now()
+
 	return ings, errorChannels
 }
 
 func (ab *AdmissionBatcher) ValidateIngress(ing *networking.Ingress) error {
-	errCh := ab.addIngressToHandle(ing)
-	klog.Info(
-		"Ingress ",
-		fmt.Sprintf("%v/%v", ing.Namespace, ing.Name),
-		" submitted for batch validation, waiting for verdict...",
-	)
+	ab.mu.Lock()
+
+	ab.ingresses = append(ab.ingresses, ing)
+
+	errCh := make(chan error)
+	ab.errorChannels = append(ab.errorChannels, errCh)
+
+	ab.mu.Unlock()
+
+	// debug
+	klog.Info("Ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name), " submitted for batch validation, waiting for verdict...")
 	return <-errCh
 }
 
-func (ab *AdmissionBatcher) addIngressToHandle(ing *networking.Ingress) chan error {
-	ab.isWorkingMU.Lock()
-	defer ab.isWorkingMU.Unlock()
-
-	ns := Namespace(ing.Namespace)
-
-	if _, ok := ab.isOnBatching[ns]; !ok {
-		ab.isOnBatching[ns] = false
+func max(d1, d2 time.Duration) time.Duration {
+	if d1 < d2 {
+		return d2
 	}
-	ab.ingresses[ns] = append(ab.ingresses[ns], ing)
-
-	errCh := make(chan error)
-	ab.errorChannels[ns] = append(ab.errorChannels[ns], errCh)
-	return errCh
+	return d1
 }
