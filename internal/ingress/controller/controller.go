@@ -607,15 +607,9 @@ func (n *NGINXController) getDefaultUpstream() *ingress.Backend {
 
 // getConfiguration returns the configuration matching the standard kubernetes ingress
 func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.Set[string], []*ingress.Server, *ingress.Configuration) {
-	var ingsListSB strings.Builder
-	for _, ing := range ingresses {
-		ingsListSB.WriteString(fmt.Sprintf("%v/%v ", ing.Namespace, ing.Name))
-	}
-	ingsListStr := ingsListSB.String()
-
 	start := time.Now()
 	upstreams, servers := n.getBackendServers(ingresses)
-	klog.Info("Got backend servers in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
+	klog.V(3).Infof("Got backend servers in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
 
 	var passUpstreams []*ingress.SSLPassthroughBackend
 
@@ -666,7 +660,7 @@ func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.S
 		}
 	}
 
-	klog.Info("Collected info about passupstreams in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
+	klog.V(3).Infof("Collected info about passupstreams in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
 
 	return hosts, servers, &ingress.Configuration{
 		Backends:              upstreams,
@@ -1224,7 +1218,8 @@ func (n *NGINXController) serviceEndpoints(svcKey, backendPort string) ([]ingres
 			servicePort.Name == backendPort {
 			endps := getEndpointsFromSlices(svc, &servicePort, apiv1.ProtocolTCP, zone, n.store.GetServiceEndpointsSlices)
 			if len(endps) == 0 {
-				klog.Warningf("Service %q does not have any active Endpoint.", svcKey)
+				//move to verbose info, cause of noisy false positive due to disabled dev stands
+				klog.V(3).Infof("Service %q does not have any active Endpoint.", svcKey)
 			}
 
 			upstreams = append(upstreams, endps...)
