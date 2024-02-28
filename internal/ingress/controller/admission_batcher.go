@@ -63,6 +63,7 @@ func (n *NGINXController) BatchConsumerRoutine(i int) {
 		n.admissionBatcher.workerMU.Lock()
 		if !n.admissionBatcher.hasNewIngresses() {
 			n.admissionBatcher.workerMU.Unlock()
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 
