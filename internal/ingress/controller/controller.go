@@ -39,7 +39,6 @@ import (
 	"k8s.io/ingress-nginx/internal/ingress/annotations/proxy"
 	ngx_config "k8s.io/ingress-nginx/internal/ingress/controller/config"
 	"k8s.io/ingress-nginx/internal/ingress/controller/ingressclass"
-	"k8s.io/ingress-nginx/internal/ingress/controller/store"
 	"k8s.io/ingress-nginx/internal/ingress/errors"
 	"k8s.io/ingress-nginx/internal/ingress/inspector"
 	"k8s.io/ingress-nginx/internal/ingress/metric/collectors"
@@ -320,7 +319,7 @@ func (n *NGINXController) CheckWarning(ing *networking.Ingress) ([]string, error
 // CheckIngress returns an error in case the provided ingress, when added
 // to the current configuration, generates an invalid configuration
 func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
-	startCheck := time.Now().UnixNano() / 1000000
+	//startCheck := time.Now().UnixNano() / 1000000
 
 	if ing == nil {
 		// no ingress to add, no state change
@@ -352,7 +351,7 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 	if n.cfg.DisableCatchAll && ing.Spec.DefaultBackend != nil {
 		return fmt.Errorf("this deployment is trying to create a catch-all ingress while DisableCatchAll flag is set to true. Remove '.spec.defaultBackend' or set DisableCatchAll flag to false")
 	}
-	startRender := time.Now().UnixNano() / 1000000
+	//startRender := time.Now().UnixNano() / 1000000
 	cfg := n.store.GetBackendConfiguration()
 	cfg.Resolver = n.resolver
 
@@ -391,50 +390,14 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 
 	k8s.SetDefaultNGINXPathType(ing)
 
-	allIngresses := n.store.ListIngresses()
-
-	filter := func(toCheck *ingress.Ingress) bool {
-		return toCheck.ObjectMeta.Namespace == ing.ObjectMeta.Namespace &&
-			toCheck.ObjectMeta.Name == ing.ObjectMeta.Name
-	}
-	ings := store.FilterIngresses(allIngresses, filter)
-	parsed, err := annotations.NewAnnotationExtractor(n.store).Extract(ing)
-	if err != nil {
-		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		return err
-	}
-	ings = append(ings, &ingress.Ingress{
-		Ingress:           *ing,
-		ParsedAnnotations: parsed,
-	})
-	startTest := time.Now().UnixNano() / 1000000
-	_, servers, _ := n.getConfiguration(ings)
-
-	err = checkOverlap(ing, servers)
-	if err != nil {
-		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
-		return err
-	}
-	testedSize := len(ings)
-
 	klog.Info("starting validation of ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
-	err = n.admissionBatcher.ValidateIngress(ing)
+	err := n.admissionBatcher.ValidateIngress(ing)
 	if err != nil {
 		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
 		return err
 	}
 
 	n.metricCollector.IncCheckCount(ing.ObjectMeta.Namespace, ing.Name)
-	endCheck := time.Now().UnixNano() / 1000000
-	n.metricCollector.SetAdmissionMetrics(
-		float64(testedSize),
-		float64(endCheck-startTest)/1000,
-		float64(len(ings)),
-		float64(startTest-startRender)/1000,
-		//can't calculate content properly because of batching
-		float64(0),
-		float64(endCheck-startCheck)/1000,
-	)
 	return nil
 }
 
@@ -609,7 +572,7 @@ func (n *NGINXController) getDefaultUpstream() *ingress.Backend {
 func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.Set[string], []*ingress.Server, *ingress.Configuration) {
 	start := time.Now()
 	upstreams, servers := n.getBackendServers(ingresses)
-	klog.V(3).Infof("Got backend servers in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
+	klog.Infof("Got backend servers in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
 
 	var passUpstreams []*ingress.SSLPassthroughBackend
 
@@ -660,7 +623,7 @@ func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.S
 		}
 	}
 
-	klog.V(3).Infof("Collected info about passupstreams in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
+	klog.Infof("Collected info about passupstreams in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
 
 	return hosts, servers, &ingress.Configuration{
 		Backends:              upstreams,
