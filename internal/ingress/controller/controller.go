@@ -99,6 +99,8 @@ type Configuration struct {
 
 	EnableSSLPassthrough bool
 
+	DisableLeaderElection bool
+
 	EnableProfiling bool
 
 	EnableMetrics        bool
