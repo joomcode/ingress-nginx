@@ -199,7 +199,6 @@ func NewNGINXController(config *Configuration, mc metric.Collector) *NGINXContro
 		filesToWatch = append(filesToWatch, path)
 		return nil
 	})
-
 	if err != nil {
 		klog.Fatalf("Error creating file watchers: %v", err)
 	}
