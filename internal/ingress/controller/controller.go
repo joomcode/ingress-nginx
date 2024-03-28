@@ -90,6 +90,7 @@ type Configuration struct {
 	UpdateStatus           bool
 	UseNodeInternalIP      bool
 	ElectionID             string
+	ElectionTTL            time.Duration
 	UpdateStatusOnShutdown bool
 
 	HealthCheckHost string
