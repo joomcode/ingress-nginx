@@ -68,14 +68,13 @@ func GetCgroupVersion() int64 {
 	// /sys/fs/cgroup/cgroup.controllers will not exist with cgroupsv1
 	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err == nil {
 		return 2
-	} else {
-		return 1
 	}
+
+	return 1
 }
 
-func readCgroup2FileToInt64Tuple(cgroupFile string) (int64, int64) {
-	contents, err := os.ReadFile(filepath.Join("/sys/fs/cgroup/", cgroupFile))
-
+func readCgroup2FileToInt64Tuple(cgroupFile string) (quota, period int64) {
+	contents, err := os.ReadFile(filepath.Join(string(os.PathSeparator), "sys", "fs", "cgroup", cgroupFile))
 	if err != nil {
 		return -1, -1
 	}
@@ -91,7 +90,6 @@ func readCgroup2FileToInt64Tuple(cgroupFile string) (int64, int64) {
 	}
 
 	cpuQuota, err := strconv.ParseInt(values[0], 10, 64)
-
 	if err != nil {
 		return -1, -1
 	}
@@ -101,7 +99,6 @@ func readCgroup2FileToInt64Tuple(cgroupFile string) (int64, int64) {
 	}
 
 	cpuPeriod, err := strconv.ParseInt(values[1], 10, 64)
-
 	if err != nil {
 		return -1, -1
 	}
