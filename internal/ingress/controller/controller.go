@@ -39,6 +39,7 @@ import (
 	"k8s.io/ingress-nginx/internal/ingress/annotations/proxy"
 	ngx_config "k8s.io/ingress-nginx/internal/ingress/controller/config"
 	"k8s.io/ingress-nginx/internal/ingress/controller/ingressclass"
+	"k8s.io/ingress-nginx/internal/ingress/controller/store"
 	"k8s.io/ingress-nginx/internal/ingress/errors"
 	"k8s.io/ingress-nginx/internal/ingress/inspector"
 	"k8s.io/ingress-nginx/internal/ingress/metric/collectors"
@@ -312,7 +313,7 @@ func (n *NGINXController) CheckWarning(ing *networking.Ingress) ([]string, error
 // CheckIngress returns an error in case the provided ingress, when added
 // to the current configuration, generates an invalid configuration
 func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
-	//startCheck := time.Now().UnixNano() / 1000000
+	startCheck := time.Now().UnixNano() / 1000000
 
 	if ing == nil {
 		// no ingress to add, no state change
@@ -344,7 +345,7 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 	if n.cfg.DisableCatchAll && ing.Spec.DefaultBackend != nil {
 		return fmt.Errorf("this deployment is trying to create a catch-all ingress while DisableCatchAll flag is set to true. Remove '.spec.defaultBackend' or set DisableCatchAll flag to false")
 	}
-	//startRender := time.Now().UnixNano() / 1000000
+	startRender := time.Now().UnixNano() / 1000000
 	cfg := n.store.GetBackendConfiguration()
 	cfg.Resolver = n.resolver
 
@@ -383,14 +384,61 @@ func (n *NGINXController) CheckIngress(ing *networking.Ingress) error {
 
 	k8s.SetDefaultNGINXPathType(ing)
 
-	klog.Info("starting validation of ingress ", fmt.Sprintf("%v/%v", ing.Namespace, ing.Name))
-	err := n.admissionBatcher.ValidateIngress(ing)
+	allIngresses := n.store.ListIngresses()
+
+	filter := func(toCheck *ingress.Ingress) bool {
+		return toCheck.ObjectMeta.Namespace == ing.ObjectMeta.Namespace &&
+			toCheck.ObjectMeta.Name == ing.ObjectMeta.Name
+	}
+	ings := store.FilterIngresses(allIngresses, filter)
+	parsed, err := annotations.NewAnnotationExtractor(n.store).Extract(ing)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
+	}
+	ings = append(ings, &ingress.Ingress{
+		Ingress:           *ing,
+		ParsedAnnotations: parsed,
+	})
+	startTest := time.Now().UnixNano() / 1000000
+	_, servers, pcfg := n.getConfiguration(ings)
+
+	err = checkOverlap(ing, servers)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
+	}
+	testedSize := len(ings)
+	if n.cfg.DisableFullValidationTest {
+		_, _, pcfg = n.getConfiguration(ings[len(ings)-1:])
+		testedSize = 1
+	}
+
+	content, err := n.generateTemplate(cfg, *pcfg)
 	if err != nil {
 		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
 		return err
 	}
 
+	/* Deactivated to mitigate CVE-2025-1974
+	// TODO: Implement sandboxing so this test can be done safely
+	err = n.testTemplate(content)
+	if err != nil {
+		n.metricCollector.IncCheckErrorCount(ing.ObjectMeta.Namespace, ing.Name)
+		return err
+	}
+	*/
+
 	n.metricCollector.IncCheckCount(ing.ObjectMeta.Namespace, ing.Name)
+	endCheck := time.Now().UnixNano() / 1000000
+	n.metricCollector.SetAdmissionMetrics(
+		float64(testedSize),
+		float64(endCheck-startTest)/1000,
+		float64(len(ings)),
+		float64(startTest-startRender)/1000,
+		float64(len(content)),
+		float64(endCheck-startCheck)/1000,
+	)
 	return nil
 }
 
@@ -563,15 +611,11 @@ func (n *NGINXController) getDefaultUpstream() *ingress.Backend {
 
 // getConfiguration returns the configuration matching the standard kubernetes ingress
 func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.Set[string], []*ingress.Server, *ingress.Configuration) {
-	start := time.Now()
 	upstreams, servers := n.getBackendServers(ingresses)
-	klog.Infof("Got backend servers in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
-
 	var passUpstreams []*ingress.SSLPassthroughBackend
 
 	hosts := sets.New[string]()
 
-	start = time.Now()
 	for _, server := range servers {
 		// If a location is defined by a prefix string that ends with the slash character, and requests are processed by one of
 		// proxy_pass, fastcgi_pass, uwsgi_pass, scgi_pass, memcached_pass, or grpc_pass, then the special processing is performed.
@@ -615,8 +659,6 @@ func (n *NGINXController) getConfiguration(ingresses []*ingress.Ingress) (sets.S
 			break
 		}
 	}
-
-	klog.Infof("Collected info about passupstreams in %f seconds for %d ingresses", time.Now().Sub(start).Seconds(), len(ingresses))
 
 	return hosts, servers, &ingress.Configuration{
 		Backends:              upstreams,
@@ -1174,8 +1216,7 @@ func (n *NGINXController) serviceEndpoints(svcKey, backendPort string) ([]ingres
 			servicePort.Name == backendPort {
 			endps := getEndpointsFromSlices(svc, &servicePort, apiv1.ProtocolTCP, zone, n.store.GetServiceEndpointsSlices)
 			if len(endps) == 0 {
-				//move to verbose info, cause of noisy false positive due to disabled dev stands
-				klog.V(3).Infof("Service %q does not have any active Endpoint.", svcKey)
+				klog.Warningf("Service %q does not have any active Endpoint.", svcKey)
 			}
 
 			upstreams = append(upstreams, endps...)
