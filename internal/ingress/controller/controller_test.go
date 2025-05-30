@@ -195,6 +195,8 @@ func TestCheckIngress(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 	nginx = newNGINXController(t)
+	nginx.StartAdmissionBatcher()
+	defer nginx.StopAdmissionBatcher()
 	if err := nginx.CheckIngress(nil); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -2612,9 +2614,10 @@ func newNGINXController(t *testing.T) *NGINXController {
 	}
 
 	return &NGINXController{
-		store:   storer,
-		cfg:     config,
-		command: NewNginxCommand(),
+		store:            storer,
+		cfg:              config,
+		command:          NewNginxCommand(),
+		admissionBatcher: NewAdmissionBatcher(),
 	}
 }
 
