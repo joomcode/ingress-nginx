@@ -111,6 +111,8 @@ func NewNGINXController(config *Configuration, mc metric.Collector) *NGINXContro
 		metricCollector: mc,
 
 		command: NewNginxCommand(),
+
+		admissionBatcher: NewAdmissionBatcher(),
 	}
 
 	if n.cfg.ValidationWebhook != "" {
@@ -264,6 +266,8 @@ type NGINXController struct {
 	validationWebhookServer *http.Server
 
 	command NginxExecTester
+
+	admissionBatcher AdmissionBatcher
 }
 
 // Start starts a new NGINX master process running in the foreground.
@@ -341,6 +345,8 @@ func (n *NGINXController) Start() {
 		}()
 	}
 
+	n.StartAdmissionBatcher()
+
 	for {
 		select {
 		case err := <-n.ngxErrCh:
@@ -387,6 +393,8 @@ func (n *NGINXController) Stop() error {
 	if n.syncQueue.IsShuttingDown() {
 		return fmt.Errorf("shutdown already in progress")
 	}
+
+	n.StopAdmissionBatcher()
 
 	time.Sleep(time.Duration(n.cfg.ShutdownGracePeriod) * time.Second)
 
