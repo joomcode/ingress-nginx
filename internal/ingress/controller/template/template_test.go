@@ -71,7 +71,7 @@ var (
 		"when secure backend enabled": {
 			"/",
 			"/",
-			"/",
+			"\"/\"",
 			"proxy_pass https://upstream_balancer;",
 			"proxy_pass https://upstream_balancer;",
 			false,
@@ -82,7 +82,7 @@ var (
 		"when secure backend and dynamic config enabled": {
 			"/",
 			"/",
-			"/",
+			"\"/\"",
 			"proxy_pass https://upstream_balancer;",
 			"proxy_pass https://upstream_balancer;",
 			false,
@@ -93,7 +93,7 @@ var (
 		"when secure backend, stickiness and dynamic config enabled": {
 			"/",
 			"/",
-			"/",
+			"\"/\"",
 			"proxy_pass https://upstream_balancer;",
 			"proxy_pass https://upstream_balancer;",
 			true,
@@ -104,7 +104,7 @@ var (
 		"invalid redirect / to / with dynamic config enabled": {
 			"/",
 			"/",
-			"/",
+			"\"/\"",
 			"proxy_pass http://upstream_balancer;",
 			"proxy_pass $scheme://upstream_balancer;",
 			false,
@@ -115,7 +115,7 @@ var (
 		"invalid redirect / to /": {
 			"/",
 			"/",
-			"/",
+			"\"/\"",
 			"proxy_pass http://upstream_balancer;",
 			"proxy_pass $scheme://upstream_balancer;",
 			false,
@@ -548,12 +548,25 @@ func TestBuildAuthResponseLua(t *testing.T) {
 
 func TestBuildAuthProxySetHeaders(t *testing.T) {
 	proxySetHeaders := map[string]string{
-		"header1": "value1",
-		"header2": "value2",
+		"Content-Security-Policy": "default-src 'self'; img-src 'self' example.com",
+		"Content-Type":            "application/json; charset=\"utf-8\"",
+		"header1":                 "value1",
+		"header2":                 "value2",
+		"Link":                    "<https://example.com>; rel=\"preload\"; as=\"script\"; crossorigin=\"anonymous\"",
+		"User-Agent":              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+		"new\rline":               "value1",
+		"newline2":                "valu\ne2",
 	}
+
 	expected := []string{
-		"proxy_set_header 'header1' 'value1';",
-		"proxy_set_header 'header2' 'value2';",
+		`proxy_set_header "Content-Security-Policy" "default-src 'self'; img-src 'self' example.com";`,
+		`proxy_set_header "Content-Type" "application/json; charset=\"utf-8\"";`,
+		`proxy_set_header "Link" "<https://example.com>; rel=\"preload\"; as=\"script\"; crossorigin=\"anonymous\"";`,
+		`proxy_set_header "User-Agent" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";`,
+		`proxy_set_header "header1" "value1";`,
+		`proxy_set_header "header2" "value2";`,
+		`proxy_set_header "new\rline" "value1";`,
+		`proxy_set_header "newline2" "valu\ne2";`,
 	}
 
 	headers := buildAuthProxySetHeaders(proxySetHeaders)
@@ -740,6 +753,110 @@ func TestTemplateWithData(t *testing.T) {
 
 	if !strings.Contains(string(rt), "listen 2.2.2.2") {
 		t.Errorf("invalid NGINX template, expected IPV4 listen address not present")
+	}
+}
+
+func mustReadTemplateConfig(t *testing.T) config.TemplateConfig {
+	t.Helper()
+
+	pwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(path.Join(pwd, "../../../../test/data/config.json"))
+	if err != nil {
+		t.Fatalf("unexpected error reading json file: %v", err)
+	}
+
+	var dat config.TemplateConfig
+	if err := jsoniter.ConfigCompatibleWithStandardLibrary.Unmarshal(data, &dat); err != nil {
+		t.Fatalf("unexpected error unmarshalling json: %v", err)
+	}
+	if dat.ListenPorts == nil {
+		dat.ListenPorts = &config.ListenPorts{}
+	}
+
+	// Required by template rendering.
+	dat.Cfg.DefaultSSLCertificate = &ingress.SSLCert{}
+
+	return dat
+}
+
+func TestTemplateRendersEscapedLocationPath(t *testing.T) {
+	dat := mustReadTemplateConfig(t)
+
+	implSpecific := networking.PathTypeImplementationSpecific
+	if len(dat.Servers) == 0 || len(dat.Servers[0].Locations) == 0 {
+		t.Fatalf("test/data/config.json must contain at least one server and one location")
+	}
+
+	base := dat.Servers[0]
+	loc := *base.Locations[0]
+	// path containing a quote and a backslash
+	loc.Path = `/"\\`
+	loc.PathType = &implSpecific
+
+	srv := *base
+	srv.Hostname = "escape.test"
+	srv.Aliases = nil
+	srv.Locations = []*ingress.Location{&loc}
+
+	dat.Servers = append(dat.Servers, &srv)
+
+	ngxTpl, err := NewTemplate(nginx.TemplatePath)
+	if err != nil {
+		t.Fatalf("invalid NGINX template: %v", err)
+	}
+
+	rt, err := ngxTpl.Write(&dat)
+	if err != nil {
+		t.Fatalf("invalid NGINX template: %v", err)
+	}
+
+	out := string(rt)
+	if !strings.Contains(out, `server_name "escape.test"`) {
+		t.Fatalf("expected server block for escape.test")
+	}
+	// The rendered nginx.conf must keep the path inside quotes and escape quotes/backslashes.
+	if !strings.Contains(out, `location "/\"\\\\"`) {
+		t.Fatalf("expected escaped location path to be rendered safely")
+	}
+}
+
+func TestTemplateRendersEscapedServerAliases(t *testing.T) {
+	dat := mustReadTemplateConfig(t)
+
+	if len(dat.Servers) == 0 {
+		t.Fatalf("test/data/config.json must contain at least one server")
+	}
+
+	base := dat.Servers[0]
+	srv := *base
+	srv.Hostname = "alias.test"
+	srv.Aliases = []string{`foo\\bar`, `foo"bar`}
+
+	dat.Servers = append(dat.Servers, &srv)
+
+	ngxTpl, err := NewTemplate(nginx.TemplatePath)
+	if err != nil {
+		t.Fatalf("invalid NGINX template: %v", err)
+	}
+
+	rt, err := ngxTpl.Write(&dat)
+	if err != nil {
+		t.Fatalf("invalid NGINX template: %v", err)
+	}
+
+	out := string(rt)
+	if !strings.Contains(out, `server_name "alias.test"`) {
+		t.Fatalf("expected server block for alias.test")
+	}
+	if !strings.Contains(out, `"foo\\\\bar"`) {
+		t.Fatalf("expected backslashes in server-alias to be escaped")
+	}
+	if !strings.Contains(out, `"foo\"bar"`) {
+		t.Fatalf("expected quotes in server-alias to be escaped")
 	}
 }
 

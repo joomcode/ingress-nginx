@@ -115,7 +115,7 @@ var _ = framework.DescribeSetting("OCSP", func() {
 
 		f.WaitForNginxServer(host,
 			func(server string) bool {
-				return strings.Contains(server, fmt.Sprintf(`server_name %v`, host))
+				return strings.Contains(server, fmt.Sprintf(`server_name "%v"`, host))
 			})
 
 		tlsConfig := &tls.Config{ServerName: host, InsecureSkipVerify: true} //nolint:gosec // Ignore the gosec error in testing
@@ -297,7 +297,7 @@ func ocspserveDeployment(namespace string) (*appsv1.Deployment, *corev1.Service)
 						Containers: []corev1.Container{
 							{
 								Name:  name,
-								Image: "registry.k8s.io/ingress-nginx/cfssl:v1.1.3@sha256:68defb0ae012e3023e81c525958e5e19a0fac64841f17f488c798a2f582b67a5",
+								Image: "registry.k8s.io/ingress-nginx/cfssl:v1.2.9@sha256:40abba2d26b5aba72bd40bbadde1a00eabf6dfbd7111c7dd40ebe0281e70bb93",
 								Command: []string{
 									"/bin/bash",
 									"-c",

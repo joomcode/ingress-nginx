@@ -18,6 +18,9 @@ metadata:
     {{- end }}
 spec:
   ttlSecondsAfterFinished: 0
+{{- if gt (int .Values.controller.admissionWebhooks.patchWebhookJob.activeDeadlineSeconds) 0 }}
+  activeDeadlineSeconds: {{ .Values.controller.admissionWebhooks.patchWebhookJob.activeDeadlineSeconds }}
+{{- end }}
   template:
     metadata:
       name: {{ include "ingress-nginx.admissionWebhooks.patchWebhookJob.fullname" . }}
@@ -67,6 +70,9 @@ spec:
           {{- if .Values.controller.admissionWebhooks.patchWebhookJob.resources }}
           resources: {{ toYaml .Values.controller.admissionWebhooks.patchWebhookJob.resources | nindent 12 }}
           {{- end }}
+          {{- if .Values.controller.admissionWebhooks.patchWebhookJob.volumeMounts }}
+          volumeMounts: {{- toYaml .Values.controller.admissionWebhooks.patchWebhookJob.volumeMounts | nindent 12 }}
+          {{- end }}
       restartPolicy: OnFailure
       serviceAccountName: {{ include "ingress-nginx.admissionWebhooks.patch.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.controller.admissionWebhooks.patch.serviceAccount.automountServiceAccountToken }}
@@ -78,5 +84,8 @@ spec:
     {{- end }}
     {{- if .Values.controller.admissionWebhooks.patch.securityContext }}
       securityContext: {{ toYaml .Values.controller.admissionWebhooks.patch.securityContext | nindent 8 }}
+    {{- end }}
+    {{- if .Values.controller.admissionWebhooks.patchWebhookJob.volumes }}
+      volumes: {{- toYaml .Values.controller.admissionWebhooks.patchWebhookJob.volumes | nindent 8 }}
     {{- end }}
 {{- end }}

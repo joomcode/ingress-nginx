@@ -88,7 +88,7 @@ func (m mockBackend) GetDefaultBackend() defaults.Backend {
 		ProxyReadTimeout:         20,
 		ProxyBuffersNumber:       4,
 		ProxyBufferSize:          "10k",
-		ProxyBusyBuffersSize:     "15k",
+		ProxyBusyBuffersSize:     "",
 		ProxyBodySize:            "3k",
 		ProxyNextUpstream:        "error",
 		ProxyNextUpstreamTimeout: 0,
@@ -258,6 +258,9 @@ func TestProxyWithNoAnnotation(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a Config type")
 	}
+	if p.BusyBuffersSize != "" {
+		t.Errorf("expected empty BusyBuffersSize but returned %v", p.BusyBuffersSize)
+	}
 	if p.ConnectTimeout != 10 {
 		t.Errorf("expected 10 as connect-timeout but returned %v", p.ConnectTimeout)
 	}
@@ -272,9 +275,6 @@ func TestProxyWithNoAnnotation(t *testing.T) {
 	}
 	if p.BufferSize != "10k" {
 		t.Errorf("expected 10k as buffer-size but returned %v", p.BufferSize)
-	}
-	if p.BusyBuffersSize != "15k" {
-		t.Errorf("expected 15k as buffer-size but returned %v", p.BusyBuffersSize)
 	}
 	if p.BodySize != "3k" {
 		t.Errorf("expected 3k as body-size but returned %v", p.BodySize)
@@ -296,5 +296,85 @@ func TestProxyWithNoAnnotation(t *testing.T) {
 	}
 	if p.ProxyMaxTempFileSize != "1024m" {
 		t.Errorf("expected 1024m as proxy-max-temp-file-size but returned %v", p.ProxyMaxTempFileSize)
+	}
+}
+
+func TestCookieDomainRegex(t *testing.T) {
+	validator := parser.ValidateRegex(cookieDomainRegex, false)
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{
+			name:    "should accept off",
+			value:   "off",
+			wantErr: false,
+		},
+		{
+			name:    "should accept two space-separated domains",
+			value:   "example.org .example.com",
+			wantErr: false,
+		},
+		{
+			name:    "should accept domain with dot prefix",
+			value:   ".old.domain .new.domain",
+			wantErr: false,
+		},
+		{
+			name:    "should reject single domain without space",
+			value:   "example.org",
+			wantErr: true,
+		},
+		{
+			name:    "should accept value with colon",
+			value:   "example.org:8080 .example.com",
+			wantErr: false,
+		},
+		{
+			name:    "should reject three parameters",
+			value:   "example.org example.com extra",
+			wantErr: true,
+		},
+		{
+			name:    "should reject empty value",
+			value:   "",
+			wantErr: true,
+		},
+		{
+			name:    "should reject value with semicolon",
+			value:   "example.org; .example.com",
+			wantErr: true,
+		},
+		{
+			name:    "should accept multiple spaces between tokens",
+			value:   "example.org   .example.com",
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validator(tt.value); (err != nil) != tt.wantErr {
+				t.Errorf("cookieDomainRegex validator(%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestProxyWithBusyBuffersSizeAnnotation(t *testing.T) {
+	ing := buildIngress()
+	data := map[string]string{}
+	data[parser.GetAnnotationWithPrefix("proxy-busy-buffers-size")] = "4k"
+	ing.SetAnnotations(data)
+	i, err := NewParser(mockBackend{}).Parse(ing)
+	if err != nil {
+		t.Fatalf("unexpected error parsing a valid")
+	}
+	p, ok := i.(*Config)
+	if !ok {
+		t.Fatalf("expected a Config type")
+	}
+	if p.BusyBuffersSize != "4k" {
+		t.Errorf("expected 4k as BusyBuffersSize but returned %v", p.BusyBuffersSize)
 	}
 }

@@ -42,7 +42,7 @@ worker_cpu_affinity {{ $cfg.WorkerCPUAffinity }};
 
 worker_rlimit_nofile {{ $cfg.MaxWorkerOpenFiles }};
 
-{{/* http://nginx.org/en/docs/ngx_core_module.html#worker_shutdown_timeout */}}
+{{/* https://nginx.org/en/docs/ngx_core_module.html#worker_shutdown_timeout */}}
 {{/* avoid waiting too long during a reload */}}
 worker_shutdown_timeout {{ $cfg.WorkerShutdownTimeout }} ;
 
@@ -351,7 +351,7 @@ http {
     log_format upstreaminfo {{ if $cfg.LogFormatEscapeNone }}escape=none {{ else if $cfg.LogFormatEscapeJSON }}escape=json {{ end }}'{{ $cfg.LogFormatUpstream }}';
 
     {{/* map urls that should not appear in access.log */}}
-    {{/* http://nginx.org/en/docs/http/ngx_http_log_module.html#access_log */}}
+    {{/* https://nginx.org/en/docs/http/ngx_http_log_module.html#access_log */}}
     map $request_uri $loggable {
         {{ range $reqUri := $cfg.SkipAccessLogURLs }}
         {{ $reqUri }} 0;{{ end }}
@@ -380,7 +380,7 @@ http {
     map $http_upgrade $connection_upgrade {
         default          upgrade;
         {{ if (gt $cfg.UpstreamKeepaliveConnections 0) }}
-        # See http://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive
+        # See https://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive
         ''               '';
         {{ else }}
         ''               close;
@@ -480,7 +480,7 @@ http {
     {{ end }}
 
     {{ if not (empty $cfg.SSLDHParam) }}
-    # allow custom DH file http://nginx.org/en/docs/http/ngx_http_ssl_module.html#ssl_dhparam
+    # allow custom DH file https://nginx.org/en/docs/http/ngx_http_ssl_module.html#ssl_dhparam
     ssl_dhparam {{ $cfg.SSLDHParam }};
     {{ end }}
 
@@ -589,7 +589,7 @@ http {
     {{ range $redirect := .RedirectServers }}
     ## start server {{ $redirect.From }}
     server {
-        server_name {{ $redirect.From }};
+        server_name {{ $redirect.From | quote }};
 
         {{ buildHTTPListener  $all $redirect.From }}
         {{ buildHTTPSListener $all $redirect.From }}
@@ -619,7 +619,7 @@ http {
     {{ $applyGlobalAuth := shouldApplyGlobalAuth $location $all.Cfg.GlobalExternalAuth.URL }}
     {{ $applyAuthUpstream := shouldApplyAuthUpstream $location $all.Cfg }}
     {{ if and (eq $applyAuthUpstream true) (eq $applyGlobalAuth false) }}
-    ## start auth upstream {{ $server.Hostname }}{{ $location.Path }}
+    ## start auth upstream {{ $server.Hostname }}
     upstream {{ buildAuthUpstreamName $location $server.Hostname }} {
         {{- $externalAuth := $location.ExternalAuth }}
         server {{ extractHostPort $externalAuth.URL }};
@@ -628,7 +628,7 @@ http {
         keepalive_requests {{ $externalAuth.KeepaliveRequests }};
         keepalive_timeout {{ $externalAuth.KeepaliveTimeout }}s;
     }
-    ## end auth upstream {{ $server.Hostname }}{{ $location.Path }}
+    ## end auth upstream {{ $server.Hostname }}
     {{ end }}
     {{ end }}
     {{ end }}
@@ -636,7 +636,7 @@ http {
     {{ range $server := $servers }}
     ## start server {{ $server.Hostname }}
     server {
-        server_name {{ buildServerName $server.Hostname }} {{range $server.Aliases }}{{ . }} {{ end }};
+        server_name {{ buildServerName $server.Hostname | quote }} {{ range $server.Aliases }}"{{ sanitizeQuotedRegex . }}" {{ end }};
 
         {{ if $cfg.UseHTTP2 }}
             http2 on;
@@ -1041,6 +1041,7 @@ stream {
             # resumes it has the correct value set for this variable so that Lua can pick backend correctly
             set $proxy_upstream_name {{ buildUpstreamName $location | quote }};
 
+            proxy_intercept_errors      off;
             proxy_pass_request_body     off;
             proxy_set_header            Content-Length          "";
             proxy_set_header            X-Forwarded-Proto       "";
@@ -1076,7 +1077,9 @@ stream {
             {{ end }}
             proxy_buffer_size                       {{ $location.Proxy.BufferSize }};
             proxy_buffers                           {{ $location.Proxy.BuffersNumber }} {{ $location.Proxy.BufferSize }};
+            {{ if $location.Proxy.BusyBuffersSize }}
             proxy_busy_buffers_size                 {{ $location.Proxy.BusyBuffersSize }};
+            {{ end }}
             proxy_request_buffering                 {{ $location.Proxy.RequestBuffering }};
 
             proxy_ssl_server_name       on;
@@ -1111,7 +1114,7 @@ stream {
             # The target is an upstream with HTTP keepalive, that is why the
             # Connection header is cleared and the HTTP version is set to 1.1 as
             # the Nginx documentation suggests:
-            # http://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive
+            # https://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive
             proxy_http_version 1.1;
             proxy_set_header Connection "";
             set $target {{ changeHostPort $externalAuth.URL $authUpstreamName }};
@@ -1334,7 +1337,9 @@ stream {
             proxy_buffering                         {{ $location.Proxy.ProxyBuffering }};
             proxy_buffer_size                       {{ $location.Proxy.BufferSize }};
             proxy_buffers                           {{ $location.Proxy.BuffersNumber }} {{ $location.Proxy.BufferSize }};
+            {{ if $location.Proxy.BusyBuffersSize }}
             proxy_busy_buffers_size                 {{ $location.Proxy.BusyBuffersSize }};
+            {{ end }}
             {{ if isValidByteSize $location.Proxy.ProxyMaxTempFileSize true }}
             proxy_max_temp_file_size                {{ $location.Proxy.ProxyMaxTempFileSize }};
             {{ end }}

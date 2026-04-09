@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	networking "k8s.io/api/networking/v1"
 	"k8s.io/ingress-nginx/internal/ingress/annotations"
 	"k8s.io/ingress-nginx/internal/ingress/controller/store"
@@ -142,21 +141,21 @@ func (n *NGINXController) validateNewIngresses(newIngresses []*networking.Ingres
 	for _, newIngress := range newIngresses {
 		err := checkOverlap(newIngress, servers)
 		if err != nil {
-			return errors.Wrapf(err, "error while validating overlap for ingress %s/%s", newIngress.Namespace, newIngress.Name)
+			return fmt.Errorf("error while validating overlap for ingress %s/%s: %w", newIngress.Namespace, newIngress.Name, err)
 		}
 	}
 
 	start = time.Now()
 	template, err := n.generateTemplate(cfg, *newIngCfg)
 	if err != nil {
-		return errors.Wrapf(err, "error while generating template for ingresses %s", ingsListStr)
+		return fmt.Errorf("error while generating template for ingresses %s: %w", ingsListStr, err)
 	}
 	klog.Info("Generated nginx template in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 
 	start = time.Now()
 	err = n.testTemplate(template)
 	if err != nil {
-		return errors.Wrapf(err, "error while testing template for of ingresses %s", ingsListStr)
+		return fmt.Errorf("error while testing template for of ingresses %s: %w", ingsListStr, err)
 	}
 	klog.Info("Tested nginx template in ", time.Now().Sub(start).Seconds(), " seconds for ", ingsListStr)
 

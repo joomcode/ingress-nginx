@@ -68,7 +68,7 @@ const (
 // Writer is the interface to render a template
 type Writer interface {
 	// Write renders the template.
-	// NOTE: Implementors must ensure that the content of the returned slice is not modified by the implementation
+	// NOTE: Implementers must ensure that the content of the returned slice is not modified by the implementation
 	// after the return of this function.
 	Write(conf *config.TemplateConfig) ([]byte, error)
 }
@@ -278,6 +278,7 @@ var funcMap = text_template.FuncMap{
 	"buildLuaSharedDictionaries":      buildLuaSharedDictionaries,
 	"luaConfigurationRequestBodySize": luaConfigurationRequestBodySize,
 	"buildLocation":                   buildLocation,
+	"sanitizeQuotedRegex":             sanitizeQuotedRegex,
 	"buildAuthLocation":               buildAuthLocation,
 	"shouldApplyGlobalAuth":           shouldApplyGlobalAuth,
 	"buildAuthResponseHeaders":        buildAuthResponseHeaders,
@@ -526,16 +527,30 @@ func buildLocation(input interface{}, enforceRegex bool) string {
 		return slash
 	}
 
-	path := location.Path
+	path := sanitizeQuotedRegex(location.Path)
 	if enforceRegex {
 		return fmt.Sprintf(`~* "^%s"`, path)
 	}
-
 	if location.PathType != nil && *location.PathType == networkingv1.PathTypeExact {
-		return fmt.Sprintf(`= %s`, path)
+		return fmt.Sprintf(`= "%s"`, path)
 	}
 
-	return path
+	return fmt.Sprintf(`"%s"`, path)
+}
+
+// sanitizeQuotedRegex escapes backslashes and double quotes in a location path
+// so paths cannot escape NGINX configuration.
+func sanitizeQuotedRegex(path string) string {
+	builder := strings.Builder{}
+	builder.Grow(2 * len(path))
+	// note that iterating over a string iterates over its runes, not bytes
+	for _, r := range path {
+		if r == '\\' || r == '"' {
+			builder.WriteByte('\\')
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
 }
 
 func buildAuthLocation(input interface{}, globalExternalAuthURL string) string {
@@ -549,9 +564,7 @@ func buildAuthLocation(input interface{}, globalExternalAuthURL string) string {
 		return ""
 	}
 
-	str := base64.URLEncoding.EncodeToString([]byte(location.Path))
-	// removes "=" after encoding
-	str = strings.ReplaceAll(str, "=", "")
+	str := base64.RawURLEncoding.EncodeToString([]byte(location.Path))
 
 	pathType := "default"
 	if location.PathType != nil {
@@ -619,8 +632,9 @@ func buildAuthProxySetHeaders(headers map[string]string) []string {
 	}
 
 	for name, value := range headers {
-		res = append(res, fmt.Sprintf("proxy_set_header '%v' '%v';", name, value))
+		res = append(res, fmt.Sprintf("proxy_set_header %q %q;", name, value))
 	}
+
 	sort.Strings(res)
 	return res
 }
@@ -772,7 +786,7 @@ func buildProxyPass(_ string, b, loc interface{}) string {
 
 		return fmt.Sprintf(`
 rewrite "(?i)%s" %s break;
-%v%v %s%s;`, path, location.Rewrite.Target, xForwardedPrefix, proxyPass, proto, upstreamName)
+%v%v %s%s;`, sanitizeQuotedRegex(path), location.Rewrite.Target, xForwardedPrefix, proxyPass, proto, upstreamName)
 	}
 
 	// default proxy_pass
@@ -848,7 +862,7 @@ func buildRateLimitZones(input interface{}) []string {
 		}
 	}
 
-	return zones.UnsortedList()
+	return sets.List(zones)
 }
 
 // buildRateLimit produces an array of limit_req to be used inside the Path of
@@ -993,7 +1007,7 @@ func buildNextUpstream(i, r interface{}) string {
 	return strings.Join(nextUpstreamCodes, " ")
 }
 
-// refer to http://nginx.org/en/docs/syntax.html
+// refer to https://nginx.org/en/docs/syntax.html
 // Nginx differentiates between size and offset
 // offset directives support gigabytes in addition
 var (
@@ -1002,7 +1016,7 @@ var (
 )
 
 // isValidByteSize validates size units valid in nginx
-// http://nginx.org/en/docs/syntax.html
+// https://nginx.org/en/docs/syntax.html
 func isValidByteSize(input interface{}, isOffset bool) bool {
 	s, ok := input.(string)
 	if !ok {
