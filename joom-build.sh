@@ -7,9 +7,17 @@ export BASE_TAG
 BASE_TAG=$(cat TAG)
 export TAG="${BASE_TAG}-batching-patch-$(date -u +%d%m%y-%H%M%S)"
 
-export ARCH=amd64
+ARCHES=(amd64 arm64)
+IMAGE="${REGISTRY}/controller"
 
-make build ARCH=$ARCH
-make image PLATFORM=linux/$ARCH TAG=$TAG REGISTRY=$REGISTRY
+for ARCH in "${ARCHES[@]}"; do
+  make build ARCH="$ARCH"
+  make image PLATFORM="linux/$ARCH" TAG="${TAG}-${ARCH}" ARCH="$ARCH" REGISTRY="$REGISTRY"
+  docker push "${IMAGE}:${TAG}-${ARCH}"
+done
 
-docker push "${REGISTRY}/controller:${TAG}"
+docker manifest create "${IMAGE}:${TAG}" \
+  "${IMAGE}:${TAG}-amd64" \
+  "${IMAGE}:${TAG}-arm64"
+
+docker manifest push "${IMAGE}:${TAG}"
